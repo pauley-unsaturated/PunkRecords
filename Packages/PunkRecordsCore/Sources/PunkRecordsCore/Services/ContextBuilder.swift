@@ -240,6 +240,7 @@ public actor ContextBuilder {
         - Cite specific notes when drawing on them (use the format [[Note Title]]).
         - Point out contradictions or gaps in the user's notes when relevant.
         - Be concise unless asked to elaborate.
+        - If a "Currently selected text" section is present, the user can see and is referring to that text.
 
         Knowledge base context:
         """

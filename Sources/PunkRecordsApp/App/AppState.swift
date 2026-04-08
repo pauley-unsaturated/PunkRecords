@@ -13,6 +13,7 @@ final class AppState {
     var isLoading = false
     var errorMessage: String?
     var askAIText: String?
+    var selectedText: String?
 
     // Dependencies — initialized lazily when a vault is opened
     private(set) var repository: FileSystemDocumentRepository?

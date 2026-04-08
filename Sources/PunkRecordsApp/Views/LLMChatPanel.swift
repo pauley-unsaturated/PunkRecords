@@ -120,6 +120,7 @@ struct LLMChatPanel: View {
         do {
             let stream = try await orchestrator.ask(
                 prompt: text,
+                selectedText: appState.selectedText,
                 scope: scope,
                 currentDocumentID: appState.selectedDocumentID
             )

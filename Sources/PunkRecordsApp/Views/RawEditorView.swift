@@ -11,10 +11,16 @@ struct RawEditorView: View {
     var body: some View {
         Group {
             if let viewModel {
-                EditorTextViewRepresentable(viewModel: viewModel) { selectedText in
-                    appState.askAIText = selectedText
-                    appState.isChatPanelVisible = true
-                }
+                EditorTextViewRepresentable(
+                    viewModel: viewModel,
+                    onAskAI: { selectedText in
+                        appState.askAIText = selectedText
+                        appState.isChatPanelVisible = true
+                    },
+                    onSelectionChanged: { selectedText in
+                        appState.selectedText = selectedText
+                    }
+                )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ProgressView("Loading...")
@@ -108,10 +114,12 @@ private struct SyntaxHighlightPreview: NSViewRepresentable {
 struct EditorTextViewRepresentable: NSViewRepresentable {
     let viewModel: DocumentEditorViewModel
     var onAskAI: ((String) -> Void)?
+    var onSelectionChanged: ((String?) -> Void)?
 
-    init(viewModel: DocumentEditorViewModel, onAskAI: ((String) -> Void)? = nil) {
+    init(viewModel: DocumentEditorViewModel, onAskAI: ((String) -> Void)? = nil, onSelectionChanged: ((String?) -> Void)? = nil) {
         self.viewModel = viewModel
         self.onAskAI = onAskAI
+        self.onSelectionChanged = onSelectionChanged
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -147,19 +155,33 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(viewModel: viewModel, onAskAI: onAskAI)
+        let coordinator = Coordinator(viewModel: viewModel, onAskAI: onAskAI)
+        coordinator.onSelectionChanged = onSelectionChanged
+        return coordinator
     }
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         let viewModel: DocumentEditorViewModel
         let onAskAI: ((String) -> Void)?
+        var onSelectionChanged: ((String?) -> Void)?
         private let highlighter = RegexSyntaxHighlighter()
         private var debounceTask: Task<Void, Never>?
 
         init(viewModel: DocumentEditorViewModel, onAskAI: ((String) -> Void)? = nil) {
             self.viewModel = viewModel
             self.onAskAI = onAskAI
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            let selectedRange = textView.selectedRange()
+            if selectedRange.length > 0 {
+                let text = (textView.string as NSString).substring(with: selectedRange)
+                onSelectionChanged?(text)
+            } else {
+                onSelectionChanged?(nil)
+            }
         }
 
         func textView(_ textView: NSTextView, menu: NSMenu, for event: NSEvent, at charIndex: Int) -> NSMenu? {

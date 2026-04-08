@@ -228,12 +228,22 @@ struct SearchQueryParser {
 
         var ftsQuery: String {
             var parts: [String] = []
-            parts.append(contentsOf: terms)
-            parts.append(contentsOf: phrases.map { "\"\($0)\"" })
+            parts.append(contentsOf: terms.map { Self.sanitizeFTSTerm($0) }.filter { !$0.isEmpty })
+            parts.append(contentsOf: phrases.map { "\"\(Self.sanitizeFTSTerm($0))\"" })
             for excluded in excludedTerms {
-                parts.append("NOT \(excluded)")
+                let clean = Self.sanitizeFTSTerm(excluded)
+                if !clean.isEmpty { parts.append("NOT \(clean)") }
             }
             return parts.joined(separator: " ")
+        }
+
+        /// Strip characters that FTS5 interprets as query syntax operators.
+        private static func sanitizeFTSTerm(_ term: String) -> String {
+            let ftsSpecialChars = CharacterSet(charactersIn: "\"*?(){}[]^~:\\-+|&!")
+            return term.unicodeScalars
+                .filter { !ftsSpecialChars.contains($0) }
+                .map { String($0) }
+                .joined()
         }
     }
 
