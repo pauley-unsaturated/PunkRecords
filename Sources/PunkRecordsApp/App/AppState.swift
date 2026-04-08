@@ -80,7 +80,7 @@ final class AppState {
     }
 
     func createNewNote() {
-        guard let vault = currentVault else { return }
+        guard currentVault != nil else { return }
         let id = DocumentID()
         let parser = MarkdownParser()
         let frontmatter = parser.generateFrontmatter(id: id)
