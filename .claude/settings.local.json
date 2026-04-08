@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:onepiece.fandom.com)",
+      "WebFetch(domain:nitter.net)",
+      "WebFetch(domain:en.onepiece.fandom.com)",
+      "WebSearch",
+      "WebFetch(domain:xcancel.com)",
+      "Bash(xcodegen --version)",
+      "Bash(xcodegen generate:*)",
+      "Bash(xcodebuild -project PunkRecords.xcodeproj -scheme PunkRecords -destination 'platform=macOS' build)",
+      "Bash(xcodebuild -project PunkRecords.xcodeproj -scheme PunkRecords -destination 'platform=macOS,arch=arm64' build)",
+      "mcp__xcode__XcodeListWindows",
+      "mcp__xcode__BuildProject",
+      "mcp__xcode__RunAllTests",
+      "mcp__xcode__XcodeListNavigatorIssues",
+      "mcp__xcode__GetTestList",
+      "mcp__xcode__GetBuildLog",
+      "mcp__xcode__RunSomeTests",
+      "mcp__xcode__RenderPreview",
+      "Bash(swift test:*)",
+      "Bash(xcodebuild test:*)"
+    ]
+  }
+}

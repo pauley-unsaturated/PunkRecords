@@ -30,6 +30,17 @@ struct RawEditorView: View {
         .navigationSubtitle(viewModel?.isDirty == true ? "Edited" : "")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                Button("Compile to Wiki", systemImage: "doc.text.magnifyingglass") {
+                    Task { await compileCurrentDocument() }
+                }
+                .help("Compile this document into a structured wiki article using AI")
+                .disabled(appState.noteCompiler == nil)
+
+                Button("Backlinks", systemImage: "link") {
+                    appState.isBacklinksPanelVisible.toggle()
+                }
+                .help("Toggle Backlinks Panel")
+
                 Button("AI Chat", systemImage: "bubble.left.and.text.bubble.right") {
                     appState.isChatPanelVisible.toggle()
                 }
@@ -38,6 +49,21 @@ struct RawEditorView: View {
         }
         .task(id: documentID) {
             await loadDocument()
+        }
+    }
+
+    private func compileCurrentDocument() async {
+        guard let vm = viewModel,
+              let compiler = appState.noteCompiler else { return }
+        do {
+            let doc = try await compiler.compileFromSource(
+                sourceContent: vm.document.content,
+                sourceTitle: vm.document.title,
+                folderPath: ""
+            )
+            appState.selectedDocumentID = doc.id
+        } catch {
+            appState.errorMessage = "Failed to compile note: \(error.localizedDescription)"
         }
     }
 

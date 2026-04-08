@@ -11,7 +11,7 @@ public actor FileSystemDocumentRepository: DocumentRepository {
     private var watcher: FSEventStreamWatcher?
 
     public init(vaultRoot: URL, ignoredPaths: [String] = []) {
-        self.vaultRoot = vaultRoot
+        self.vaultRoot = vaultRoot.standardizedFileURL
         self.parser = MarkdownParser()
         self.ignoredPaths = ignoredPaths
 
@@ -182,8 +182,9 @@ public actor FileSystemDocumentRepository: DocumentRepository {
 
     private func listMarkdownFiles(in directory: URL, relativeTo root: URL) throws -> [Document] {
         let fm = FileManager.default
+        let standardRoot = root.standardizedFileURL
         guard let enumerator = fm.enumerator(
-            at: directory,
+            at: directory.standardizedFileURL,
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles]
         ) else { return [] }
@@ -193,7 +194,8 @@ public actor FileSystemDocumentRepository: DocumentRepository {
         for case let fileURL as URL in enumerator {
             guard fileURL.pathExtension == "md" else { continue }
 
-            let relativePath = fileURL.path.replacingOccurrences(of: root.path + "/", with: "")
+            let standardFile = fileURL.standardizedFileURL
+            let relativePath = standardFile.path.replacingOccurrences(of: standardRoot.path + "/", with: "")
 
             // Skip ignored paths
             if ignoredPaths.contains(where: { Self.pathMatchesGlob(relativePath, glob: $0) }) {

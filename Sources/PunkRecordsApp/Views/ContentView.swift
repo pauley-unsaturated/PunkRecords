@@ -13,7 +13,16 @@ struct ContentView: View {
             } detail: {
                 HStack(spacing: 0) {
                     if let docID = appState.selectedDocumentID {
-                        RawEditorView(documentID: docID)
+                        VStack(spacing: 0) {
+                            RawEditorView(documentID: docID)
+
+                            if appState.isBacklinksPanelVisible {
+                                Divider()
+                                BacklinksPanel(documentID: docID)
+                                    .frame(height: 180)
+                                    .accessibilityIdentifier("backlinksPanel")
+                            }
+                        }
                     } else {
                         ContentUnavailableView(
                             "No Note Selected",

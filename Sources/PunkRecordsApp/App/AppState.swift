@@ -10,6 +10,7 @@ final class AppState {
     var selectedDocumentID: DocumentID?
     var isSearchPresented = false
     var isChatPanelVisible = false
+    var isBacklinksPanelVisible = true
     var isLoading = false
     var errorMessage: String?
     var askAIText: String?
