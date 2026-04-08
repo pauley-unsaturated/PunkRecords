@@ -1,10 +1,12 @@
 # PunkRecords — Product & Technical Specification
 
-> *"The Poneglyphs recorded history the world tried to erase. PunkRecords does the same for your mind."*
+> *Named after Dr. Vegapunk's Punk Records — the giant externalized brain on Egghead Island that stores all of Vegapunk's knowledge and lets his satellite bodies sync to it. PunkRecords does the same for your mind: your knowledge lives in the vault, LLMs process and enhance it, and you direct the whole thing.*
 
-**Version:** 0.1 (Pre-build)
-**Status:** Draft — iterate before building
+**Version:** 0.3
+**Status:** Draft — Phase 1 decisions locked
 **Platform:** macOS (primary), iOS / visionOS (future phases)
+**Minimum macOS:** 15 (Sequoia). FoundationModels gated behind `@available(macOS 26, *)`.
+**Distribution:** Direct (no App Store sandbox). App Store migration is a future option.
 
 ---
 
@@ -14,7 +16,7 @@
 2. [Architecture Overview](#2-architecture-overview)
 3. [Module Breakdown](#3-module-breakdown)
 4. [Data Model](#4-data-model)
-5. [Document Storage & iCloud Sync](#5-document-storage--icloud-sync)
+5. [Document Storage & Sync](#5-document-storage--sync)
 6. [Markdown Editor Design](#6-markdown-editor-design)
 7. [LLM Integration Layer](#7-llm-integration-layer)
 8. [Search Architecture](#8-search-architecture)
@@ -28,15 +30,18 @@
 
 ### What It Is
 
-PunkRecords is a macOS-first personal knowledge base built on plain Markdown files, differentiated by deep, first-class LLM integration. It stores your notes, research, PDFs, and ideas in iCloud Drive — fully portable, fully yours — while giving you an on-device AI assistant that understands your entire knowledge base.
+PunkRecords is a macOS-first personal knowledge base built on plain Markdown files, differentiated by deep, first-class LLM integration. It stores your notes, research, PDFs, and ideas in a folder of your choosing — fully portable, fully yours — while giving you an AI that doesn't just answer questions about your knowledge base, but actively builds and maintains it.
 
-Think Obsidian meets Apple Intelligence, with escape hatches to Anthropic and OpenAI when you need more horsepower.
+The key insight (inspired by [Karpathy's LLM Knowledge Bases workflow](https://x.com/karpathy/status/2039805659525644595)): **the LLM is not a sidebar chat — it's the primary author of the wiki.** You curate, direct, and query. The LLM writes, links, indexes, summarizes, and maintains. Raw sources go in, compiled knowledge comes out, and every interaction compounds the KB.
+
+Think Obsidian meets Apple Intelligence, with escape hatches to Anthropic and OpenAI when you need more horsepower — and with the LLM as a first-class collaborator, not just an assistant.
 
 ### Core Principles
 
 - **Your files, your format.** Notes are `.md` files on disk. No proprietary database. No lock-in.
-- **Privacy first.** Default inference is on-device via Apple FoundationModels. Cloud models are opt-in.
-- **Deep, not wide.** The LLM doesn't just answer questions — it cross-references your KB, finds contradictions, surfaces related notes, and acts as a research librarian.
+- **Privacy first.** Default inference is on-device via Apple FoundationModels (macOS 26+). Cloud models are opt-in.
+- **LLM as author, not just assistant.** The LLM writes wiki articles, compiles sources, maintains links, and keeps the KB healthy. You rarely edit the wiki manually — it's the domain of the LLM.
+- **Every interaction compounds.** LLM outputs get filed back into the KB. Queries, summaries, and explorations always add up.
 - **Native Mac.** SwiftUI + AppKit. Feels like a real Mac app, not an Electron wrapper.
 
 ### Non-Goals (v1)
@@ -60,16 +65,16 @@ Think Obsidian meets Apple Intelligence, with escape hatches to Anthropic and Op
 │  │  (SwiftUI /  │  │  (Pure Swift)  │  │  Layer              │ │
 │  │   AppKit)    │  │                │  │                     │ │
 │  │              │  │  • Document    │  │  • FileSystemStore  │ │
-│  │  • Editor    │  │    Service     │  │  • iCloudSync       │ │
-│  │  • Sidebar   │  │  • Search      │  │  • LLMProviders     │ │
-│  │  • Preview   │  │    Service     │  │    (Foundation,     │ │
-│  │  • LLM Chat  │  │  • LLM         │  │     Anthropic,      │ │
-│  │  • Settings  │  │    Orchestrator│  │     OpenAI, MLX)    │ │
+│  │  • Editor    │  │    Service     │  │  • LLMProviders     │ │
+│  │  • Sidebar   │  │  • Search      │  │    (Foundation,     │ │
+│  │  • LLM Chat  │  │    Service     │  │     Anthropic,      │ │
+│  │  • Settings  │  │  • LLM         │  │     OpenAI)         │ │
+│  │              │  │    Orchestrator│  │  • SQLiteIndex       │ │
 │  └──────────────┘  └────────────────┘  └─────────────────────┘ │
 │                                                                 │
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │                   Persistence Layer                       │  │
-│  │   iCloud Drive (.md files)  ·  SQLite (index/metadata)   │  │
+│  │   User-chosen folder (.md files)  ·  SQLite (index only) │  │
 │  └───────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -106,22 +111,23 @@ The heart of the app. Depends only on Foundation and Swift standard library.
 | `LLMOrchestrator` | Routes queries to appropriate provider, manages context window |
 | `LLMProvider` (protocol) | Abstraction over all inference backends |
 | `ContextBuilder` | Assembles relevant document excerpts into LLM context |
-| `MarkdownParser` | Parses `.md` to AST; extracts links, tags, frontmatter |
+| `NoteCompiler` | Orchestrates LLM-driven note creation: source compilation, save-as-note, KB enhancement |
+| `MarkdownParser` | Wraps `cmark-gfm`; extracts links, tags, frontmatter |
+| `SyntaxHighlighter` (protocol) | Abstraction for editor syntax highlighting |
 
 ### 3.2 `PunkRecordsInfra` (Swift Package)
 
-Concrete implementations. Imports FoundationModels, MLX, network SDKs.
+Concrete implementations. Imports `cmark-gfm`, GRDB, network SDKs, FoundationModels (conditionally).
 
 | Component | Responsibility |
 |---|---|
 | `FileSystemDocumentRepository` | Reads/writes `.md` files; watches via `FSEventStream` |
-| `iCloudSyncCoordinator` | Manages `NSFileCoordinator`, conflict resolution |
-| `SQLiteSearchIndex` | Full-text search via FTS5; metadata indexing |
-| `FoundationModelsProvider` | Apple on-device inference via FoundationModels framework |
-| `MLXProvider` | Local model inference via MLX-Swift |
+| `SQLiteSearchIndex` | Full-text search via FTS5; metadata and link graph indexing |
 | `AnthropicProvider` | Anthropic Messages API client |
-| `OpenAIProvider` | OpenAI Chat Completions API client |
-| `PDFRenderer` | Wraps PDFKit for in-app PDF viewing |
+| `OpenAIProvider` | OpenAI Chat Completions API client (configurable base URL for Ollama/LM Studio) |
+| `FoundationModelsProvider` | Apple on-device inference via FoundationModels framework (`@available(macOS 26, *)`) |
+| `RegexSyntaxHighlighter` | Regex-based `NSTextStorage` highlighter (implements `SyntaxHighlighter` protocol) |
+| `PDFRenderer` | Wraps PDFKit for in-app PDF viewing (Phase 2) |
 
 ### 3.3 `PunkRecordsUI` (App target)
 
@@ -130,18 +136,21 @@ SwiftUI views and AppKit integration.
 | Component | Responsibility |
 |---|---|
 | `VaultBrowserView` | Sidebar: folder/file tree |
-| `EditorView` | Split preview+raw or full-preview WYSIWYG |
-| `MarkdownRenderer` | Live-rendered GFM view (read/preview mode) |
-| `RawEditorView` | Syntax-highlighted raw text editor |
+| `RawEditorView` | Syntax-highlighted raw text editor (Phase 1 only editor) |
 | `LLMChatPanel` | Slide-in panel for KB-aware AI chat |
 | `TextSelectionMenu` | Contextual menu on selected text: "Ask AI", "Find related" |
 | `SearchView` | Full-text + LLM-assisted search UI |
-| `SettingsView` | API keys, model selection, sync preferences |
+| `SettingsView` | API keys, model selection, vault preferences |
+
+Phase 2 additions:
+| Component | Responsibility |
+|---|---|
+| `EditorView` | Split preview+raw or full-preview WYSIWYG |
+| `MarkdownRenderer` | Live-rendered GFM view (read/preview mode) |
 | `PDFViewerView` | Embedded PDF viewer (PDFKit) |
 
 ### 3.4 Supporting Packages
 
-- **`MarkdownAST`** — shared AST types used by both parser and renderer; no UI or I/O deps
 - **`PunkRecordsTestSupport`** — mock implementations of domain protocols for use in tests
 
 ---
@@ -173,7 +182,7 @@ typealias RelativePath = String
 struct Vault: Identifiable, Sendable {
     let id: UUID
     var name: String
-    var rootURL: URL            // iCloud Drive container directory
+    var rootURL: URL            // User-chosen folder (local, iCloud, Dropbox, etc.)
     var settings: VaultSettings
 }
 
@@ -187,7 +196,9 @@ struct VaultSettings: Codable, Sendable {
 
 ### 4.3 Search Index (SQLite)
 
-Stored at `<vault_root>/.punkrecords/index.sqlite`. Three tables:
+Stored at `<vault_root>/.punkrecords/index.sqlite`. This is an **index only** — all source data lives in `.md` files on disk. The index is always rebuildable from scratch.
+
+Three tables:
 
 ```sql
 -- Full-text search via FTS5
@@ -199,7 +210,7 @@ CREATE VIRTUAL TABLE document_fts USING fts5(
     tokenize = 'porter ascii'
 );
 
--- Document metadata (fast lookups without reading .md files)
+-- Document metadata cache (fast lookups without reading .md files)
 CREATE TABLE document_meta (
     id          TEXT PRIMARY KEY,   -- UUID string
     path        TEXT NOT NULL,
@@ -259,119 +270,110 @@ tags: [research, ai, swift]
 
 ---
 
-## 5. Document Storage & iCloud Sync
+## 5. Document Storage & Sync
 
 ### 5.1 Storage Layout
 
-```
-iCloud Drive/
-└── PunkRecords/                    ← App's iCloud container
-    └── <VaultName>/
-        ├── .punkrecords/
-        │   ├── index.sqlite        ← Search index (not synced, regenerated)
-        │   ├── vault.json          ← Vault settings
-        │   └── .noindex            ← Tells Spotlight to skip index files
-        ├── Notes/
-        │   ├── MyNote.md
-        │   └── Subfolder/
-        │       └── AnotherNote.md
-        └── Attachments/
-            └── paper.pdf
-```
+A vault is any user-chosen folder. PunkRecords creates a `.punkrecords/` subdirectory for its own data. The user is free to back the folder with iCloud Drive, git, Dropbox, or nothing at all.
 
-The `.punkrecords/` directory is excluded from iCloud sync via `URLResourceKey.isExcludedFromBackupKey` on the index file. The `index.sqlite` is always regenerated locally from the synced `.md` files.
+```
+<User-Chosen-Folder>/
+├── .punkrecords/
+│   ├── index.sqlite        ← Search index (rebuildable, not worth syncing)
+│   └── vault.json          ← Vault settings
+├── Notes/
+│   ├── MyNote.md
+│   └── Subfolder/
+│       └── AnotherNote.md
+└── Attachments/
+    └── paper.pdf
+```
 
 ### 5.2 File Watching
 
 - Use `FSEventStream` (via `FileSystemDocumentRepository`) to watch the vault root directory tree.
 - On file events: debounce 300ms, re-read changed files, update SQLite index, publish changes to UI via `AsyncStream<VaultChange>`.
-- `NSFileCoordinator` wraps all reads and writes to be iCloud-safe.
-- `NSFilePresenter` protocol handles iCloud-initiated changes (another device saving a file).
+- Standard file I/O — no `NSFileCoordinator` in Phase 1. The vault is treated as a local folder.
 
-### 5.3 Conflict Resolution
+### 5.3 Sync & Conflicts
 
-iCloud Drive uses a "last write wins" model with conflict versions surfaced as shadow files (`filename (conflicted copy ...).md`). PunkRecords will:
+PunkRecords is **sync-agnostic**. The vault is a folder; the user decides how to sync it.
 
-1. Detect conflicted copies in `FSEventStream` callbacks.
-2. Surface a conflict resolution UI showing a diff.
-3. Let the user pick a version or manually merge.
-4. Archive the rejected version to `.punkrecords/conflicts/` before deleting.
+**Phase 1:** No conflict detection or resolution. If the user syncs via iCloud Drive and a conflict occurs, iCloud creates a `filename (conflicted copy ...).md` file which simply appears as a new document in the sidebar. This is acceptable — the user can manually compare and delete.
 
-**Phase 1 simplification:** Show a banner "Conflict detected in Note X" with a button to open both versions side-by-side. Full merge UI is Phase 2.
+**Phase 2+:** Detect iCloud-style conflicted copy filenames in the `FSEventStream` handler, surface a conflict banner, and offer side-by-side diff resolution. This change is isolated to the file-watching layer — no architectural rework needed.
 
 ### 5.4 New Vault Creation
 
-1. User picks a name.
-2. App creates directory in iCloud Drive container.
+1. User picks a folder (or creates a new one via the file picker).
+2. App creates `.punkrecords/` subdirectory.
 3. Writes `vault.json` with default settings.
 4. Performs initial full index build.
-5. Adds vault to app's `VaultRegistry` (stored in UserDefaults / App Group container).
+5. Adds vault to app's `VaultRegistry` (stored in UserDefaults).
 
 ---
 
 ## 6. Markdown Editor Design
 
-### 6.1 Two Modes
+### 6.1 Phase 1: Raw Editor
 
-**Preview Mode (default)**
-
-- Renders GitHub-Flavored Markdown (GFM) live as the user types.
-- Editing happens inline — click to place cursor, type to modify the underlying Markdown source.
-- Implemented as a custom `NSTextView` subclass (`PRTextView`) with:
-  - A `MarkdownTypingTransformer` that converts typed Markdown syntax to styled attributed text in real time (e.g., typing `**` around a word bolds it).
-  - A `MarkdownAttributedStringRenderer` that converts the AST to `NSAttributedString`.
-- The raw Markdown is always the source of truth. The styled view is a presentation layer.
-- Supports GFM: headers, bold, italic, strikethrough, inline code, fenced code blocks, blockquotes, ordered/unordered lists, task lists, tables, horizontal rules.
-
-**Raw Mode**
+A single-pane raw Markdown editor with syntax highlighting.
 
 - Plain text editor showing the raw `.md` source.
-- Syntax highlighting via `NSTextStorage` + regex-based highlighter (no Tree-sitter in Phase 1).
-- Toggle between modes: `⌘⇧P` (matching muscle memory from other editors).
-- The two modes share the same underlying `DocumentEditorViewModel` — switching modes is a view-layer concern only.
+- Syntax highlighting via `RegexSyntaxHighlighter` (implements the `SyntaxHighlighter` protocol), applied through an `NSTextStorage` delegate.
+- The `SyntaxHighlighter` protocol is the abstraction boundary — in Phase 2+ we can swap in a `TreeSitterSyntaxHighlighter` without changing the editor.
+- Supports GFM syntax highlighting: headers, bold, italic, strikethrough, inline code, fenced code blocks, blockquotes, lists, task lists, links, wikilinks.
 
-### 6.2 PDF Embedding
+```swift
+protocol SyntaxHighlighter: Sendable {
+    func highlight(_ text: String) -> NSAttributedString
+    func incrementalHighlight(_ text: String, editedRange: NSRange) -> [SyntaxHighlight]
+}
 
-Markdown link syntax: `[Description](attachments/paper.pdf)`
+struct SyntaxHighlight {
+    let range: NSRange
+    let style: HighlightStyle
+}
+```
 
-- When the renderer encounters a link to a `.pdf` file:
-  - Renders an inline "PDF card" showing filename + page count.
-  - Click opens an embedded `PDFView` (PDFKit) in a split pane below the note, or in a separate sheet.
-- No PDF editing. Annotation support is a future phase.
-
-### 6.3 Wikilinks
+### 6.2 Wikilinks
 
 `[[Note Title]]` or `[[Note Title|Display Text]]`
 
-- Rendered as tappable links. Clicking navigates to the target note.
-- Unresolved wikilinks shown in a distinct style (e.g., dashed underline).
+- Rendered as tappable links in the editor. Clicking navigates to the target note.
+- Unresolved wikilinks shown in a distinct style (e.g., dashed underline, different color).
 - On save, `linkedDocumentIDs` in the document model is updated for backlink tracking.
 
-### 6.4 Editor State
+### 6.3 Editor State
 
 ```swift
 @Observable
 final class DocumentEditorViewModel {
     var document: Document
-    var editorMode: EditorMode     // .preview, .raw
     var isDirty: Bool
     var selectionRange: NSRange?
     var isSaving: Bool
 
     func save() async throws
-    func toggleMode()
     func applyLLMSuggestion(_ text: String, at range: NSRange) async
 }
-
-enum EditorMode { case preview, raw }
 ```
 
-### 6.5 Autosave
+### 6.4 Autosave
 
 - Debounced autosave: 2 seconds after last keystroke.
 - Manual save: `⌘S` (immediate).
 - Dirty indicator in window title (`•` prefix, standard macOS convention).
-- Autosave writes through `DocumentRepository`, which calls `NSFileCoordinator` for iCloud safety.
+- Autosave writes through `DocumentRepository`.
+
+### 6.5 Phase 2: Preview Mode
+
+Deferred to Phase 2. Will add:
+
+- A WYSIWYG-ish preview mode via custom `NSTextView` subclass.
+- Toggle between raw and preview: `⌘⇧P`.
+- Both modes share the same `DocumentEditorViewModel`.
+- PDF embedding (inline PDF card, click to open `PDFView`).
 
 ---
 
@@ -386,6 +388,7 @@ protocol LLMProvider: Actor {
     var id: LLMProviderID { get }
     var displayName: String { get }
     var capabilities: LLMCapabilities { get }
+    var maxContextTokens: Int { get }
 
     func complete(_ request: LLMRequest) async throws -> LLMResponse
     func stream(_ request: LLMRequest) -> AsyncThrowingStream<String, Error>
@@ -401,36 +404,19 @@ struct LLMCapabilities: OptionSet {
 
 enum LLMProviderID: String, Codable {
     case foundationModels = "apple.foundation-models"
-    case mlx              = "local.mlx"
     case anthropic        = "anthropic"
     case openAI           = "openai"
 }
 ```
 
-### 7.2 Provider Implementations
-
-**`FoundationModelsProvider`**
-
-- Uses Apple's `FoundationModels` framework (iOS 26 / macOS 26+).
-- Requires Apple Intelligence to be enabled on device.
-- Falls back gracefully if unavailable (e.g., older hardware).
-- Privacy: no data leaves the device; eligible for Private Cloud Compute for larger requests.
-- System prompt injection happens via the framework's structured generation APIs.
-
-**`MLXProvider`**
-
-- Uses `mlx-swift` to run quantized GGUF/MLX format models.
-- Models stored in `~/Library/Application Support/PunkRecords/Models/`.
-- Model management UI (download, delete, set active) in Settings.
-- Runs on Apple Silicon GPU via Metal.
-- Suitable for: Llama 3, Mistral, Phi-3, Qwen families.
+### 7.2 Provider Implementations (Phase 1)
 
 **`AnthropicProvider`**
 
 - Calls the Anthropic Messages API (`/v1/messages`).
 - API key stored in macOS Keychain (never in UserDefaults or files).
 - Supports streaming via SSE.
-- Default model: `claude-opus-4-6` (configurable).
+- Default model: `claude-sonnet-4-6` (configurable).
 - Handles rate limits with exponential backoff.
 
 **`OpenAIProvider`**
@@ -439,7 +425,19 @@ enum LLMProviderID: String, Codable {
 - API key stored in Keychain.
 - Supports streaming.
 - Default model: `gpt-4o` (configurable).
-- Also supports OpenAI-compatible endpoints (Ollama, LM Studio) via custom base URL setting.
+- **Configurable base URL** — supports OpenAI-compatible endpoints out of the box:
+  - Ollama: `http://localhost:11434/v1`
+  - LM Studio: `http://localhost:1234/v1`
+  - Any other OpenAI-compatible API
+- When using a local endpoint, API key can be left empty or set to a dummy value.
+
+**`FoundationModelsProvider`** (Phase 1, gated)
+
+- Uses Apple's `FoundationModels` framework.
+- Gated behind `@available(macOS 26, *)`. Not available on macOS 15.
+- `isAvailable()` returns false on older OS or unsupported hardware.
+- Falls back gracefully — never crashes, just reports unavailability.
+- Privacy: no data leaves the device.
 
 ### 7.3 `LLMOrchestrator`
 
@@ -447,8 +445,8 @@ The orchestrator sits above the providers and manages:
 
 1. **Provider selection** — default provider from settings; user can switch per-request.
 2. **Context assembly** — calls `ContextBuilder` to find and rank relevant KB documents.
-3. **Token budget management** — trims context to fit within provider's context window.
-4. **Request routing** — if on-device provider unavailable, falls back to cloud (opt-in setting).
+3. **Token budget management** — queries the provider's `maxContextTokens` and scales context accordingly.
+4. **Request routing** — if selected provider unavailable, falls back to next enabled provider (opt-in setting).
 5. **Response streaming** — wraps provider streams into a unified `AsyncThrowingStream<LLMStreamEvent, Error>`.
 
 ```swift
@@ -466,7 +464,6 @@ enum QueryScope {
     case folder(RelativePath)       // Specific folder
     case document(DocumentID)       // Single document
     case selection                  // Only selected text + minimal context
-    case web                        // Web search (Phase 2)
 }
 
 enum LLMStreamEvent {
@@ -479,18 +476,31 @@ enum LLMStreamEvent {
 
 ### 7.4 `ContextBuilder`
 
-Assembles the LLM's system context from KB documents.
+Assembles the LLM's system context from KB documents. **Scales automatically based on provider context size.**
 
 ```
-Algorithm:
-1. Run full-text search for terms in the user's prompt.
-2. Add documents linked from the currently open note (graph neighbors).
-3. Add documents recently viewed/modified (recency signal).
-4. Score and rank by: FTS relevance + graph proximity + recency.
-5. Greedily include top-scoring excerpts until token budget is ~70% full.
-6. Reserve 30% for the response.
-7. Prepend a system prompt describing the KB and the user's query task.
+Context tiers (based on provider maxContextTokens):
+
+Small (< 4k tokens) — e.g., small on-device models:
+  - Current document only, truncated to fit.
+  - No KB-wide search. Operates as "chat about this note."
+
+Medium (4k–32k tokens) — e.g., smaller cloud models, local Ollama models:
+  - Current document + top FTS hits for query terms.
+  - Simple relevance ranking.
+  - Reserve 30% of budget for response.
+
+Large (32k+ tokens) — e.g., Claude, GPT-4o:
+  1. Run full-text search for terms in the user's prompt.
+  2. Add documents linked from the currently open note (graph neighbors).
+  3. Add documents recently viewed/modified (recency signal).
+  4. Score and rank by: FTS relevance + graph proximity + recency.
+  5. Greedily include top-scoring excerpts until token budget is ~70% full.
+  6. Reserve 30% for the response.
+  7. Prepend system prompt describing the KB and the user's query task.
 ```
+
+Token estimation in Phase 1 uses the approximation **1 token ~ 4 characters**. Exact tokenizers per provider are a Phase 3 optimization.
 
 The system prompt template (configurable):
 
@@ -513,19 +523,54 @@ When a user selects text in the editor, a contextual popover appears with:
 - **Ask AI** — opens the LLM chat panel with the selection pre-loaded as context.
 - **Find related notes** — runs a search query derived from the selection, shows results in a panel.
 - **Explain** — asks the LLM to explain the selected text in the context of the current note.
-- **Find contradictions** — asks the LLM to find notes in the KB that contradict the selection.
 - **Summarize** — summarizes a long selected passage.
-- **Web search** *(Phase 2)* — searches the web for related articles.
+
+Phase 2 additions:
+- **Find contradictions** — asks the LLM to find notes in the KB that contradict the selection.
+- **Web search** — searches the web for related articles.
 
 ### 7.6 LLM Chat Panel
 
 A slide-in panel (right side of editor window):
 
-- Persistent conversation history per document (stored in `.punkrecords/chats/<doc_id>.json`).
+- **Ephemeral conversation** — chat history clears when the panel is closed. Persistent history is Phase 2.
 - Scope selector: KB-wide, current folder, current document, selection.
 - Provider switcher (inline).
 - Streamed token-by-token output with inline citations that are clickable wikilinks.
-- "Copy to note" button on any AI response to insert it at cursor.
+- **"Save as note"** button on any AI response — creates a new `.md` file from the response. The LLM generates a title, frontmatter tags, and wikilinks to related notes. The new note is filed into the vault and indexed immediately. This is the minimum viable "LLM writes the wiki" feature.
+- "Insert at cursor" button to paste a response into the current document.
+
+### 7.7 LLM as Wiki Author
+
+The core differentiator. The LLM doesn't just answer questions — it produces and maintains wiki content.
+
+**Phase 1: Save as Note + Compile from Source**
+
+- **Save as note** (from chat panel): Any substantive LLM response can be saved as a new wiki article with one click. The LLM generates title, tags, and wikilinks. The user confirms the destination folder and can edit before saving.
+
+- **Compile note from source**: Select a document (PDF, long raw text, pasted article) and ask the LLM to produce a summarized, structured wiki article from it. The LLM:
+  1. Reads the source material.
+  2. Generates a structured `.md` article with title, sections, tags, and wikilinks to existing KB notes.
+  3. Presents a preview. User confirms or edits before saving.
+  4. Files the new note into the vault.
+
+  This is accessible via:
+  - Right-click a file in the sidebar → "Compile to wiki article"
+  - Select text → "Compile selection to note"
+  - Chat panel → "Compile this to a note" (when discussing raw material)
+
+**Phase 2: Raw Sources Convention + LLM Linting**
+
+- **Raw sources directory**: Support a `Sources/` (or user-configured) directory convention for unprocessed material — articles, papers, PDFs, clippings. The LLM can be pointed at sources to compile into wiki notes. Not a hard boundary, just a UX convention and a scope option (`scope: .folder("Sources/")`). The sidebar visually distinguishes source material from compiled wiki notes.
+
+- **LLM linting / health checks**: A "Review vault" command that runs the LLM across the KB looking for:
+  - Inconsistent or contradictory information across notes
+  - Missing data that could be filled in (with web search in Phase 3)
+  - Opportunities for new connections and cross-links
+  - Stale or outdated information
+  - Orphaned notes with no incoming or outgoing links
+  
+  Results are presented as actionable suggestions — each one can be applied (creating/editing a note) or dismissed. This runs on-demand, not automatically.
 
 ---
 
@@ -533,7 +578,7 @@ A slide-in panel (right side of editor window):
 
 ### 8.1 Full-Text Search (Phase 1)
 
-- **SQLite FTS5** with Porter stemming.
+- **SQLite FTS5** with Porter stemming, via **GRDB.swift**.
 - Index rebuilt on first launch and incrementally updated on file changes.
 - Search UI: `⌘F` for in-document, `⌘⇧F` for vault-wide.
 - Results show: title, matching excerpt with highlights, tag matches, modification date.
@@ -551,7 +596,7 @@ A slide-in panel (right side of editor window):
 
 - Track `[[wikilinks]]` and markdown links between documents.
 - Show backlinks panel: "Notes that link to this document."
-- Graph view (visual node graph) is Phase 2.
+- Graph view (visual node graph) is Phase 2+.
 
 ### 8.4 Vector / Semantic Search (Phase 3)
 
@@ -592,6 +637,7 @@ Tests live in a dedicated `PunkRecordsTests` package that has access to `PunkRec
 
 - `ContextBuilderTests`
   - Token budget is never exceeded
+  - Context tier selection matches provider's `maxContextTokens`
   - Documents ranked by relevance score (higher scores appear first)
   - Excerpts are trimmed at sentence boundaries, not mid-word
   - Empty KB produces empty context without errors
@@ -613,8 +659,17 @@ Tests live in a dedicated `PunkRecordsTests` package that has access to `PunkRec
   - `scope: .document(id)` limits context to that document only
   - Streams events in correct order: `.token`, then `.done`
 
+- `NoteCompilerTests` (using `MockLLMProvider` and `MockDocumentRepository`)
+  - "Save as note" generates valid frontmatter (id, tags, created date)
+  - "Save as note" generates wikilinks to existing KB documents when relevant
+  - "Compile from source" produces a structured article with title, sections, and tags
+  - "Compile from source" links to existing KB notes found via search
+  - Generated note is written through `DocumentRepository`
+  - User can edit the generated note before saving (preview step)
+
 - `MockLLMProvider` (in `PunkRecordsTestSupport`)
   - Configurable responses and latency
+  - Configurable `maxContextTokens` for testing context tier logic
   - Tracks all calls made for assertion
 
 ### 9.2 Unit Tests — `PunkRecordsInfraTests`
@@ -665,14 +720,23 @@ Tests live in a dedicated `PunkRecordsTests` package that has access to `PunkRec
 
 - `OpenAIProviderTests` (same approach)
   - Correctly formats Chat Completions request
-  - Custom base URL is used when set (for Ollama compatibility)
+  - Custom base URL is used when set (for Ollama/LM Studio compatibility)
   - Streaming SSE events parsed correctly
   - Error responses mapped to typed errors
 
 - `FoundationModelsProviderTests`
-  - `isAvailable()` returns false when Apple Intelligence not available (mocked)
+  - `isAvailable()` returns false on macOS < 26 or unsupported hardware
   - Falls back without crashing on older OS
   - System prompt is correctly prepended to the request
+
+**Syntax Highlighter**
+
+- `RegexSyntaxHighlighterTests`
+  - Headers highlighted correctly (H1–H6)
+  - Bold, italic, strikethrough, inline code highlighted
+  - Fenced code blocks highlighted (including language identifier)
+  - Wikilinks and markdown links highlighted
+  - Incremental highlighting updates only edited ranges
 
 ### 9.3 Integration Tests — `PunkRecordsIntegrationTests`
 
@@ -684,14 +748,6 @@ These tests run against a real temporary directory on disk (no mocks for I/O).
 - Save a document with wikilinks → backlinks are correctly indexed
 - Modify a document → index is updated within 1 second
 - Delete a document → no longer searchable; backlinks pointing to it are marked unresolved
-- Rename a document → wikilinks that used the old name are updated (Phase 2; stub for now)
-
-**iCloud Sync Simulation**
-
-- Simulate an external file write (another device) by writing a file bypassing `NSFileCoordinator`
-- Verify `FSEventStream` picks up the change and updates the index
-- Simulate a conflicted copy appearing in the directory
-- Verify conflict detection fires and the conflict is surfaced via the published stream
 
 **LLM Context Assembly**
 
@@ -700,6 +756,14 @@ These tests run against a real temporary directory on disk (no mocks for I/O).
 - Verify that the assembled context never exceeds the budget
 - Verify that the most relevant documents appear in context
 - Issue the same query twice; verify deterministic context assembly
+- Test all three context tiers (small/medium/large) with mock providers reporting different `maxContextTokens`
+
+**Note Compilation**
+
+- "Save as note" from a mock LLM response → new `.md` file appears on disk with valid frontmatter
+- "Compile from source" with a long text document → produces a structured wiki article that links to existing notes
+- Compiled note appears in search index immediately after save
+- Compiled note's wikilinks are tracked in the link graph
 
 **End-to-End Search**
 
@@ -713,12 +777,10 @@ These tests run against a real temporary directory on disk (no mocks for I/O).
 Using XCUITest.
 
 - **Editor**
-  - Open a document → content renders in preview mode
-  - Toggle to raw mode → raw markdown is shown
-  - Type in raw mode → autosave triggers → file on disk is updated
+  - Open a document → raw markdown is shown with syntax highlighting
+  - Type in editor → autosave triggers → file on disk is updated
   - Select text → contextual popover appears with expected actions
   - Click a wikilink → navigates to target document
-  - Click a `.pdf` link → PDF viewer opens
 
 - **Search**
   - `⌘⇧F` opens vault search
@@ -728,6 +790,8 @@ Using XCUITest.
 - **LLM Panel**
   - Opening the panel when no provider configured → settings prompt shown
   - (With mock provider) submitting a query streams a response
+  - "Save as note" on a response → new note created, appears in sidebar
+  - "Compile to wiki article" on a source file → preview shown, confirm creates note
 
 ### 9.5 Performance Tests
 
@@ -740,7 +804,7 @@ Using XCUITest.
 
 - `PunkRecordsTestSupport` module: mock `LLMProvider`, mock `DocumentRepository`, in-memory SQLite index, temp-directory vault factory
 - `MockURLProtocol` for intercepting network calls in `AnthropicProvider` and `OpenAIProvider` tests
-- Snapshot tests (via `swift-snapshot-testing`) for rendered Markdown output to catch rendering regressions
+- Snapshot tests (via `swift-snapshot-testing`) for rendered Markdown output to catch rendering regressions (Phase 2)
 - CI: run all unit + integration tests on every PR; UI tests on merge to `main`
 
 ---
@@ -749,39 +813,43 @@ Using XCUITest.
 
 ### Phase 1 — Foundation (Build First)
 
-**Goal:** A working, usable Markdown KB with basic LLM assistance. No bells and whistles.
+**Goal:** A working, usable Markdown KB with LLM assistance via Anthropic/OpenAI. No bells and whistles.
 
-- [ ] `PunkRecordsCore` package: Document, Vault, MarkdownParser, DocumentRepository protocol, SearchService protocol, LLMProvider protocol, LLMOrchestrator (stub)
-- [ ] `PunkRecordsInfra` package: FileSystemDocumentRepository, FSEventStream watcher, SQLite FTS5 index
-- [ ] Basic SwiftUI app: sidebar (file tree), raw text editor, autosave
-- [ ] iCloud Drive storage (basic: write files to container, no conflict UI yet)
-- [ ] FoundationModels provider (on-device Apple Intelligence)
-- [ ] LLM chat panel: KB-wide query, streamed response
+- [ ] `PunkRecordsCore` package: Document, Vault, MarkdownParser (cmark-gfm), DocumentRepository protocol, SearchService protocol, LLMProvider protocol, LLMOrchestrator, ContextBuilder with tiered context scaling, SyntaxHighlighter protocol
+- [ ] `PunkRecordsInfra` package: FileSystemDocumentRepository, FSEventStream watcher, SQLite FTS5 index (GRDB), RegexSyntaxHighlighter
+- [ ] Anthropic API provider (Messages API, streaming, Keychain storage)
+- [ ] OpenAI-compatible API provider (configurable base URL for Ollama/LM Studio)
+- [ ] FoundationModels provider (gated behind `@available(macOS 26, *)`)
+- [ ] Basic SwiftUI app: sidebar (file tree), raw text editor with syntax highlighting, autosave
+- [ ] User-chosen vault folder (no iCloud assumptions)
+- [ ] LLM chat panel: KB-aware query with ephemeral history, streamed response, scope selector
+- [ ] "Save as note" from LLM responses (LLM generates title, tags, wikilinks)
+- [ ] "Compile note from source" — LLM summarizes a document/selection into a structured wiki article
 - [ ] "Ask AI" on selected text
 - [ ] Full-text search (`⌘⇧F`)
+- [ ] Backlinks panel
 - [ ] Unit tests for all Core and Infra components
-- [ ] Integration tests for document lifecycle and search
+- [ ] Integration tests for document lifecycle, search, and context assembly
 
-**Exit criteria:** Can create/edit/search notes and ask the on-device AI about KB content.
+**Exit criteria:** Can create/edit/search notes and ask Claude or a local model about KB content. LLM can author new wiki notes from sources and chat responses. Context scales automatically to provider capabilities.
 
-### Phase 2 — Rich Editing & Cloud Models
+### Phase 2 — Rich Editing & Polish
 
-**Goal:** The full editor experience and all LLM providers.
+**Goal:** The full editor experience and production polish.
 
 - [ ] Preview mode editor (WYSIWYG-ish via `NSTextView`)
 - [ ] GitHub-Flavored Markdown rendering (all GFM features)
 - [ ] PDF embedding (view in-app via PDFKit)
-- [ ] Wikilink navigation
-- [ ] Backlinks panel
-- [ ] Anthropic API provider
-- [ ] OpenAI API provider (+ custom base URL for Ollama)
-- [ ] API key management via Keychain
-- [ ] Provider switcher in settings
-- [ ] iCloud conflict resolution UI (side-by-side diff)
+- [ ] Wikilink navigation (click to open target)
+- [ ] iCloud conflict detection and resolution UI (side-by-side diff)
 - [ ] Document rename with wikilink update
+- [ ] Persistent chat history per document
+- [ ] Raw sources directory convention (`Sources/`) with visual distinction in sidebar
+- [ ] LLM vault linting / health checks ("Review vault" command with actionable suggestions)
 - [ ] Snapshot tests for markdown rendering
+- [ ] Tree-sitter syntax highlighting (evaluate and swap in if worthwhile)
 
-**Exit criteria:** Feature-complete editor. All four LLM providers working.
+**Exit criteria:** Feature-complete editor. LLM can maintain the wiki (lint, suggest connections, compile sources). Conflict resolution works. Ready for daily use by a small group.
 
 ### Phase 3 — Intelligence & Power Features
 
@@ -795,6 +863,7 @@ Using XCUITest.
 - [ ] "Find contradictions" LLM action
 - [ ] Smart tagging suggestions
 - [ ] Daily note / journal template
+- [ ] Exact tokenizers per provider (replace 4-char approximation)
 - [ ] Performance optimization pass
 
 **Exit criteria:** Semantic search works. Local MLX models downloadable and usable.
@@ -805,38 +874,44 @@ Using XCUITest.
 - [ ] visionOS app
 - [ ] Shared `PunkRecordsCore` across all platforms
 - [ ] Platform-specific UI targets
+- [ ] App Store distribution (sandbox migration)
 - [ ] Sync conflict handling at scale
 
 ---
 
 ## 11. Open Questions & Decisions
 
-### Must Decide Before Building Phase 1
+### Resolved
 
-1. **Minimum macOS version target.** FoundationModels requires macOS 26 (Tahoe). If we target macOS 26+, we get FoundationModels but limit the user base. If we target macOS 14/15, FoundationModels must be an optional enhancement. *Recommendation: target macOS 26 to make FoundationModels first-class, with graceful degradation.*
-
-2. **Markdown AST library or roll our own?** Options: `swift-markdown` (Apple, CommonMark but not GFM), `cmark-gfm` (C library, GFM, needs bridging), custom parser. *Rolling a custom parser for Phase 1 raw mode is fine; GFM rendering for preview mode likely needs `cmark-gfm`.*
-
-3. **SQLite library.** Options: `GRDB.swift` (well-maintained, expressive Swift API), raw `sqlite3` via `CSQLite`, or `SQLite.swift`. *Recommendation: GRDB.swift for its FTS5 support, migrations, and Swift concurrency support.*
-
-4. **App Sandbox and iCloud Drive.** The app must be sandboxed for App Store distribution. iCloud Drive access requires the `com.apple.developer.ubiquity-container-identifiers` entitlement and correct iCloud capability setup. Decide on the iCloud container identifier now (usually `iCloud.com.yourname.PunkRecords`).
-
-5. **Vault as iCloud container vs. user-chosen folder.** Two models: (a) always use the app's iCloud container (`FileManager.default.url(forUbiquityContainerIdentifier:)`), or (b) let the user pick any folder (including non-iCloud local folders). *Recommendation: support both — default to iCloud container, but allow "Open Local Vault" for users who want local-only or Dropbox/etc.*
+| # | Question | Decision |
+|---|----------|----------|
+| 1 | Minimum macOS version | macOS 15 (Sequoia). FoundationModels gated behind `@available(macOS 26, *)`. |
+| 2 | Markdown parser | `cmark-gfm` from day one. Full GFM support, no rewrites between phases. |
+| 3 | SQLite library | GRDB.swift. Index only — no markdown content stored in SQL beyond FTS5 needs. |
+| 4 | Vault model | User-chosen folder. No iCloud assumptions. User decides their own backup/sync. |
+| 5 | App Sandbox | Not sandboxed (direct distribution). App Store sandbox migration is Phase 4. |
+| 6 | Phase 1 editor | Single-pane raw editor with regex syntax highlighting. Preview mode is Phase 2. |
+| 7 | Phase 1 LLM providers | Anthropic + OpenAI-compatible (with configurable base URL for Ollama/LM Studio). FoundationModels gated but included. |
+| 8 | Context scaling | Automatic tier selection (small/medium/large) based on provider's `maxContextTokens`. |
+| 9 | Chat persistence | Ephemeral in Phase 1. Persistent per-document history in Phase 2. |
+| 10 | Conflict resolution | Ignored in Phase 1 (conflicts appear as separate files). Detection + resolution UI in Phase 2. |
+| 11 | Syntax highlighting | Regex-based in Phase 1, behind a `SyntaxHighlighter` protocol so tree-sitter can be swapped in later. |
+| 12 | Distribution | Direct distribution. No App Store for now. |
+| 13 | Target audience | Personal use first (developer + close circle), then expand. |
+| 14 | LLM role | LLM is the primary wiki author, not just a chat assistant. Save-as-note and compile-from-source in Phase 1. Vault linting and raw sources convention in Phase 2. Inspired by [Karpathy's LLM KB workflow](https://x.com/karpathy/status/2039805659525644595). |
 
 ### Decide Before Phase 2
 
-6. **WYSIWYG editing approach.** Full WYSIWYG in `NSTextView` is complex. Alternatives: (a) side-by-side source/preview panes (simpler, Typora-like editing is Phase 2+), (b) `WKWebView` with CodeMirror or ProseMirror (JS dependency, not native), (c) custom `NSTextView` with attributed string rendering. *Recommendation: start with side-by-side in Phase 1, implement the custom `NSTextView` approach in Phase 2.*
+1. **WYSIWYG editing approach.** Custom `NSTextView` with attributed string rendering vs. side-by-side source/preview panes vs. `WKWebView` with ProseMirror/CodeMirror. Need to evaluate complexity vs. user experience.
 
-7. **Syntax highlighting in raw mode.** `NSTextStorage` delegate with regex is simple but slow for large files. `tree-sitter` via `swift-tree-sitter` is accurate and fast but adds a dependency. *Recommendation: regex-based for Phase 1, evaluate tree-sitter for Phase 2.*
-
-8. **Token counting.** Accurate token counting requires a tokenizer per provider (tiktoken for OpenAI, different for Anthropic). For context budget management, an approximation (1 token ≈ 4 chars) may be sufficient in Phase 1. Decide whether to ship with exact tokenizers or the approximation.
+2. **Token counting.** Phase 1 uses 1 token ~ 4 chars approximation. Evaluate whether exact tokenizers (tiktoken for OpenAI, Anthropic's tokenizer) are needed for Phase 2 or can wait for Phase 3.
 
 ### Decide Before Phase 3
 
-9. **Embedding model selection for semantic search.** Options: Apple's NLEmbedding (fast, on-device, English-only), a dedicated MLX embedding model (more capable, requires download), or a cloud embedding API. *Recommendation: NLEmbedding for Phase 3 initial cut, MLX embedding model as upgrade path.*
+3. **Embedding model selection for semantic search.** Options: Apple's NLEmbedding (fast, on-device, English-only), a dedicated MLX embedding model (more capable, requires download), or a cloud embedding API.
 
-10. **Graph view library.** Options: a custom SwiftUI force-directed graph, an AppKit `CALayer`-based renderer, or an embedded WebView with D3.js. The graph could become complex. *Recommendation: WebView + D3.js for Phase 3 (graph is a nice-to-have, not a core feature; don't over-invest in native implementation early).*
+4. **Graph view implementation.** Custom SwiftUI force-directed graph vs. AppKit `CALayer` renderer vs. embedded WebView with D3.js.
 
 ---
 
-*End of SPEC.md — v0.1*
+*End of SPEC.md — v0.2*

@@ -1,0 +1,123 @@
+name: PunkRecords
+options:
+  bundleIdPrefix: com.markpauley
+  deploymentTarget:
+    macOS: "15.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+
+localPackages:
+  - Packages/PunkRecordsCore
+  - Packages/PunkRecordsInfra
+  - Packages/PunkRecordsTestSupport
+
+targets:
+  PunkRecordsApp:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/PunkRecordsApp
+        excludes:
+          - "Resources/PreviewVault"
+      - path: Sources/PunkRecordsApp/Resources/PreviewVault
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - package: PunkRecordsCore
+      - package: PunkRecordsInfra
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.markpauley.PunkRecords
+        PRODUCT_NAME: PunkRecords
+        INFOPLIST_GENERATION_MODE: GeneratedByXcode
+        GENERATE_INFOPLIST_FILE: true
+        CODE_SIGN_ENTITLEMENTS: Sources/PunkRecordsApp/Resources/PunkRecords.entitlements
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_APP_SANDBOX: false
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: 1
+    entitlements:
+      path: Sources/PunkRecordsApp/Resources/PunkRecords.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+        com.apple.security.files.user-selected.read-write: true
+        com.apple.security.network.client: true
+
+  PunkRecordsIntegrationTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/PunkRecordsIntegrationTests
+    dependencies:
+      - package: PunkRecordsCore
+      - package: PunkRecordsInfra
+      - package: PunkRecordsTestSupport
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.markpauley.PunkRecords.IntegrationTests
+        GENERATE_INFOPLIST_FILE: true
+        CODE_SIGN_IDENTITY: "-"
+
+  PunkRecordsPromptEvals:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/PunkRecordsPromptEvals
+    dependencies:
+      - package: PunkRecordsCore
+      - package: PunkRecordsInfra
+      - package: PunkRecordsTestSupport
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.markpauley.PunkRecords.PromptEvals
+        GENERATE_INFOPLIST_FILE: true
+        CODE_SIGN_IDENTITY: "-"
+
+  PunkRecordsUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: Tests/PunkRecordsUITests
+        excludes:
+          - "Fixtures"
+      - path: Tests/PunkRecordsUITests/Fixtures/TestVault
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - target: PunkRecordsApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.markpauley.PunkRecords.UITests
+        GENERATE_INFOPLIST_FILE: true
+        CODE_SIGN_IDENTITY: "-"
+        TEST_TARGET_NAME: PunkRecordsApp
+
+schemes:
+  PunkRecords:
+    build:
+      targets:
+        PunkRecordsApp: all
+        PunkRecordsIntegrationTests: [test]
+        PunkRecordsPromptEvals: [test]
+        PunkRecordsUITests: [test]
+    run:
+      config: Debug
+      executable: PunkRecordsApp
+    test:
+      config: Debug
+      targets:
+        - PunkRecordsIntegrationTests
+        - PunkRecordsPromptEvals
+        - PunkRecordsUITests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
