@@ -25,7 +25,7 @@ struct PunkRecordsApp: App {
         .defaultPosition(.center)
         .keyboardShortcut("0")
 
-        // Vault windows — one per open knowledge base
+        // Vault windows — one per open vault
         WindowGroup(for: URL.self) { $vaultURL in
             if let url = vaultURL {
                 VaultWindow(vaultURL: url)

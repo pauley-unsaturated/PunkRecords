@@ -27,13 +27,13 @@ struct WelcomeWindow: View {
 
                 VStack(spacing: 12) {
                     WelcomeActionButton(
-                        title: "Create New Knowledge Base...",
+                        title: "Create New Vault...",
                         icon: "plus.square",
                         action: createNewVault
                     )
 
                     WelcomeActionButton(
-                        title: "Open Existing Knowledge Base...",
+                        title: "Open Existing Vault...",
                         icon: "folder",
                         action: openExistingVault
                     )
@@ -50,9 +50,9 @@ struct WelcomeWindow: View {
                 if recentsStore.recents.isEmpty {
                     Spacer()
                     ContentUnavailableView(
-                        "No Recent Knowledge Bases",
+                        "No Recent Vaults",
                         systemImage: "clock",
-                        description: Text("Knowledge bases you open will appear here")
+                        description: Text("Vaults you open will appear here")
                     )
                     Spacer()
                 } else {
@@ -82,7 +82,7 @@ struct WelcomeWindow: View {
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
-        panel.message = "Choose or create a folder for your new knowledge base"
+        panel.message = "Choose or create a folder for your new vault"
         panel.prompt = "Create"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -94,7 +94,7 @@ struct WelcomeWindow: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.message = "Choose a folder for your knowledge base"
+        panel.message = "Choose a folder for your vault"
         panel.prompt = "Open"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }

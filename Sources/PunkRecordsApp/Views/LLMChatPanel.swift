@@ -51,7 +51,7 @@ struct LLMChatPanel: View {
 
             // Input
             HStack {
-                TextField("Ask about your knowledge base...", text: $prompt, axis: .vertical)
+                TextField("Ask about your vault...", text: $prompt, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...5)
                     .onSubmit { Task { await sendMessage() } }
