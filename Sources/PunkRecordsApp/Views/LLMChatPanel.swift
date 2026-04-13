@@ -7,6 +7,7 @@ struct LLMChatPanel: View {
     @State private var messages: [ChatMessage] = []
     @State private var isStreaming = false
     @State private var scope: QueryScope = .global
+    @State private var isAgentMode = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -15,6 +16,10 @@ struct LLMChatPanel: View {
                 Text("AI Chat")
                     .font(.headline)
                 Spacer()
+                Toggle("Agent", isOn: $isAgentMode)
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .help("When enabled, the AI can search your vault, read documents, and create notes autonomously.")
                 scopePicker
                 Button("Close", systemImage: "xmark.circle.fill") {
                     appState.isChatPanelVisible = false
@@ -117,6 +122,16 @@ struct LLMChatPanel: View {
         var assistantMessage = ChatMessage(role: .assistant, content: "")
         messages.append(assistantMessage)
 
+        if isAgentMode {
+            await sendAgentMessage(text, orchestrator: orchestrator, assistantMessage: &assistantMessage)
+        } else {
+            await sendSimpleMessage(text, orchestrator: orchestrator, assistantMessage: &assistantMessage)
+        }
+
+        isStreaming = false
+    }
+
+    private func sendSimpleMessage(_ text: String, orchestrator: LLMOrchestrator, assistantMessage: inout ChatMessage) async {
         do {
             let stream = try await orchestrator.ask(
                 prompt: text,
@@ -144,8 +159,78 @@ struct LLMChatPanel: View {
                 messages[lastIndex] = assistantMessage
             }
         }
+    }
 
-        isStreaming = false
+    private func sendAgentMessage(_ text: String, orchestrator: LLMOrchestrator, assistantMessage: inout ChatMessage) async {
+        guard let repository = appState.repository,
+              let searchIndex = appState.searchIndex else {
+            assistantMessage.content = "Vault not loaded."
+            if let lastIndex = messages.indices.last {
+                messages[lastIndex] = assistantMessage
+            }
+            return
+        }
+
+        do {
+            let provider = try await orchestrator.resolveProvider()
+            let contextBuilder = ContextBuilder(searchService: searchIndex, repository: repository)
+            let tools: [any AgentTool] = [
+                VaultSearchTool(searchService: searchIndex),
+                ReadDocumentTool(repository: repository),
+                CreateNoteTool(repository: repository),
+                ListDocumentsTool(repository: repository),
+            ]
+
+            let agentLoop = AgentLoop(
+                provider: provider,
+                contextBuilder: contextBuilder,
+                tools: tools,
+                vaultName: appState.currentVault?.name ?? "Vault"
+            )
+
+            let stream = await agentLoop.run(
+                prompt: text,
+                scope: scope,
+                currentDocumentID: appState.selectedDocumentID,
+                selectedText: appState.selectedText
+            )
+
+            for try await event in stream {
+                switch event {
+                case .textToken(let token):
+                    assistantMessage.content += token
+                    if let lastIndex = messages.indices.last {
+                        messages[lastIndex] = assistantMessage
+                    }
+                case .toolStart(let name, _):
+                    assistantMessage.content += "\n\n> Using tool: **\(name)**...\n"
+                    if let lastIndex = messages.indices.last {
+                        messages[lastIndex] = assistantMessage
+                    }
+                case .toolEnd(let name, let result):
+                    if result.isError {
+                        assistantMessage.content += "> **\(name)** failed: \(result.content)\n\n"
+                    } else {
+                        assistantMessage.content += "> **\(name)** completed.\n\n"
+                    }
+                    if let lastIndex = messages.indices.last {
+                        messages[lastIndex] = assistantMessage
+                    }
+                case .error(let err):
+                    assistantMessage.content += "\n\n*Agent error: \(err)*"
+                    if let lastIndex = messages.indices.last {
+                        messages[lastIndex] = assistantMessage
+                    }
+                case .done, .agentStart, .turnStart, .turnEnd:
+                    break
+                }
+            }
+        } catch {
+            assistantMessage.content += "\n\n*Error: \(error.localizedDescription)*"
+            if let lastIndex = messages.indices.last {
+                messages[lastIndex] = assistantMessage
+            }
+        }
     }
 
     private func saveAsNote(_ content: String) async {

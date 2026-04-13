@@ -101,7 +101,7 @@ public actor LLMOrchestrator {
 
     // MARK: - Private
 
-    private func resolveProvider(_ requestedID: LLMProviderID?) async throws -> any LLMProvider {
+    public func resolveProvider(_ requestedID: LLMProviderID? = nil) async throws -> any LLMProvider {
         let targetID = requestedID ?? defaultProviderID
 
         if let provider = providers[targetID], await provider.isAvailable() {

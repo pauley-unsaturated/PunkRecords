@@ -1,11 +1,11 @@
 import Foundation
 import PunkRecordsCore
 
-/// Anthropic Messages API client with streaming support.
+/// Anthropic Messages API client with streaming and prompt caching support.
 public actor AnthropicProvider: LLMProvider {
     public nonisolated let id = LLMProviderID.anthropic
     public nonisolated let displayName = "Anthropic Claude"
-    public nonisolated let capabilities: LLMCapabilities = [.streaming, .longContext]
+    public nonisolated let capabilities: LLMCapabilities = [.streaming, .longContext, .functionCalls]
     public var maxContextTokens: Int { modelMaxTokens }
 
     private let keychainService: KeychainService
@@ -46,16 +46,10 @@ public actor AnthropicProvider: LLMProvider {
             "messages": messages,
         ]
         if let systemPrompt = request.systemPrompt {
-            body["system"] = systemPrompt
+            body["system"] = buildCacheableSystemPrompt(systemPrompt)
         }
 
-        var urlRequest = URLRequest(url: url)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        urlRequest.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
-        urlRequest.timeoutInterval = 120
+        let urlRequest = try buildURLRequest(url: url, apiKey: apiKey, body: body)
 
         let (data, response) = try await URLSession.shared.data(for: urlRequest)
         try validateResponse(response, data: data)
@@ -63,16 +57,7 @@ public actor AnthropicProvider: LLMProvider {
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         let content = json?["content"] as? [[String: Any]]
         let text = content?.first?["text"] as? String ?? ""
-
-        let usage: TokenUsage?
-        if let usageJSON = json?["usage"] as? [String: Any] {
-            usage = TokenUsage(
-                promptTokens: usageJSON["input_tokens"] as? Int ?? 0,
-                completionTokens: usageJSON["output_tokens"] as? Int ?? 0
-            )
-        } else {
-            usage = nil
-        }
+        let usage = parseUsage(json)
 
         return LLMResponse(
             text: text,
@@ -102,16 +87,10 @@ public actor AnthropicProvider: LLMProvider {
                         "stream": true,
                     ]
                     if let systemPrompt = request.systemPrompt {
-                        body["system"] = systemPrompt
+                        body["system"] = self.buildCacheableSystemPrompt(systemPrompt)
                     }
 
-                    var urlRequest = URLRequest(url: url)
-                    urlRequest.httpMethod = "POST"
-                    urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    urlRequest.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-                    urlRequest.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-                    urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
-                    urlRequest.timeoutInterval = 120
+                    let urlRequest = try self.buildURLRequest(url: url, apiKey: apiKey, body: body)
 
                     let (bytes, response) = try await URLSession.shared.bytes(for: urlRequest)
 
@@ -145,7 +124,175 @@ public actor AnthropicProvider: LLMProvider {
         }
     }
 
+    // MARK: - Tool Use
+
+    public func completeWithTools(_ request: LLMRequest) async throws -> LLMToolResponse {
+        let apiKey = try requireAPIKey()
+        let url = baseURL.appendingPathComponent("/v1/messages")
+
+        // Build messages from conversation history
+        var messages: [[String: Any]] = []
+        if let conversationMessages = request.messages {
+            for msg in conversationMessages {
+                var contentArray: [[String: Any]] = []
+                for block in msg.content {
+                    switch block {
+                    case .text(let t):
+                        contentArray.append(["type": "text", "text": t])
+                    case .toolUse(let id, let name, let input):
+                        contentArray.append([
+                            "type": "tool_use",
+                            "id": id,
+                            "name": name,
+                            "input": input.toPlainDict()
+                        ])
+                    case .toolResult(let toolUseID, let content, let isError):
+                        var resultBlock: [String: Any] = [
+                            "type": "tool_result",
+                            "tool_use_id": toolUseID,
+                            "content": content
+                        ]
+                        if isError { resultBlock["is_error"] = true }
+                        contentArray.append(resultBlock)
+                    }
+                }
+                messages.append(["role": msg.role.rawValue, "content": contentArray])
+            }
+        } else {
+            let userContent: String
+            if let selectedText = request.selectedText {
+                userContent = "Selected text: \(selectedText)\n\n\(request.userPrompt)"
+            } else {
+                userContent = request.userPrompt
+            }
+            messages.append(["role": "user", "content": userContent])
+        }
+
+        // Mark the last message block as cacheable so the entire conversation prefix
+        // is cached at each turn. Subsequent turns read it from cache.
+        markLastMessageCacheable(&messages)
+
+        var body: [String: Any] = [
+            "model": modelID,
+            "max_tokens": 4096,
+            "messages": messages,
+        ]
+        if let systemPrompt = request.systemPrompt {
+            body["system"] = buildCacheableSystemPrompt(systemPrompt)
+        }
+        if let tools = request.tools, !tools.isEmpty {
+            body["tools"] = cacheableTools(tools)
+        }
+
+        let urlRequest = try buildURLRequest(url: url, apiKey: apiKey, body: body)
+
+        let (data, response) = try await URLSession.shared.data(for: urlRequest)
+        try validateResponse(response, data: data)
+
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+        // Parse content blocks
+        var contentBlocks: [ContentBlock] = []
+        if let content = json?["content"] as? [[String: Any]] {
+            for block in content {
+                let type = block["type"] as? String
+                switch type {
+                case "text":
+                    if let text = block["text"] as? String {
+                        contentBlocks.append(.text(text))
+                    }
+                case "tool_use":
+                    if let blockID = block["id"] as? String,
+                       let name = block["name"] as? String,
+                       let input = block["input"] as? [String: Any] {
+                        contentBlocks.append(.toolUse(
+                            id: blockID,
+                            name: name,
+                            input: SendableValue.from(jsonObject: input)
+                        ))
+                    }
+                default:
+                    break
+                }
+            }
+        }
+
+        let stopReason = StopReason(rawValue: json?["stop_reason"] as? String ?? "end_turn") ?? .endTurn
+        let usage = parseUsage(json)
+
+        return LLMToolResponse(contentBlocks: contentBlocks, stopReason: stopReason, usage: usage)
+    }
+
     // MARK: - Private
+
+    /// Build a URLRequest with standard Anthropic headers.
+    /// Prompt caching is GA — no beta header required.
+    private func buildURLRequest(url: URL, apiKey: String, body: [String: Any]) throws -> URLRequest {
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        urlRequest.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        urlRequest.timeoutInterval = 120
+        return urlRequest
+    }
+
+    /// Format system prompt as a single content block with cache_control.
+    ///
+    /// `cache_control` on the last block of the cacheable section caches everything
+    /// up to and including that block. Per-conversation, the system prompt is stable,
+    /// so caching the whole thing as one block is the right call.
+    ///
+    /// Note: Sonnet 4.6 requires ≥2048 tokens for the cache to actually be created.
+    /// Smaller system prompts will silently bypass the cache.
+    private func buildCacheableSystemPrompt(_ systemPrompt: String) -> [[String: Any]] {
+        return [[
+            "type": "text",
+            "text": systemPrompt,
+            "cache_control": ["type": "ephemeral"]
+        ]]
+    }
+
+    /// Mark the last tool with cache_control so the entire tools array is cached.
+    private func cacheableTools(_ tools: [ToolDefinition]) -> [[String: Any]] {
+        return tools.enumerated().map { (idx, tool) -> [String: Any] in
+            var def: [String: Any] = [
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.inputSchema.toPlainDict()
+            ]
+            if idx == tools.count - 1 {
+                def["cache_control"] = ["type": "ephemeral"]
+            }
+            return def
+        }
+    }
+
+    /// Add cache_control to the last content block of the last message.
+    /// This caches the full conversation prefix at each turn — subsequent turns read it from cache.
+    private func markLastMessageCacheable(_ messages: inout [[String: Any]]) {
+        guard !messages.isEmpty else { return }
+        guard var lastMessage = messages.last,
+              var lastContent = lastMessage["content"] as? [[String: Any]],
+              !lastContent.isEmpty else { return }
+        var lastBlock = lastContent[lastContent.count - 1]
+        lastBlock["cache_control"] = ["type": "ephemeral"]
+        lastContent[lastContent.count - 1] = lastBlock
+        lastMessage["content"] = lastContent
+        messages[messages.count - 1] = lastMessage
+    }
+
+    /// Parse usage including prompt cache metrics from Anthropic API response.
+    private func parseUsage(_ json: [String: Any]?) -> TokenUsage? {
+        guard let usageJSON = json?["usage"] as? [String: Any] else { return nil }
+        return TokenUsage(
+            promptTokens: usageJSON["input_tokens"] as? Int ?? 0,
+            completionTokens: usageJSON["output_tokens"] as? Int ?? 0,
+            cacheCreationInputTokens: usageJSON["cache_creation_input_tokens"] as? Int ?? 0,
+            cacheReadInputTokens: usageJSON["cache_read_input_tokens"] as? Int ?? 0
+        )
+    }
 
     private func requireAPIKey() throws -> String {
         guard let key = try keychainService.apiKey(for: "anthropic"), !key.isEmpty else {

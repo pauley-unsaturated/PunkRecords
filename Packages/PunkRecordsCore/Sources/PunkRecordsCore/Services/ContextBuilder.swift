@@ -25,19 +25,27 @@ public actor ContextBuilder {
     }
 
     /// Builds context for an LLM request, scaling to fit the provider's context window.
+    /// Pass `systemPromptTemplate` to override the default prompt for A/B eval testing.
     public func buildContext(
         prompt: String,
         scope: QueryScope,
         currentDocumentID: DocumentID?,
         maxTokens: Int,
-        vaultName: String
+        vaultName: String,
+        systemPromptTemplate: String? = nil
     ) async throws -> (systemPrompt: String, excerpts: [DocumentExcerpt]) {
         let tier = ContextTier(maxTokens: maxTokens)
         let responseBudget = Int(Double(maxTokens) * 0.3)
         let contextBudget = maxTokens - responseBudget - TokenEstimator.estimateTokens(in: prompt)
 
         guard contextBudget > 0 else {
-            return (buildSystemPrompt(vaultName: vaultName, excerpts: []), [])
+            let emptyPrompt: String
+            if let template = systemPromptTemplate {
+                emptyPrompt = buildSystemPromptFromTemplate(template, vaultName: vaultName, excerpts: [])
+            } else {
+                emptyPrompt = buildSystemPrompt(vaultName: vaultName, excerpts: [])
+            }
+            return (emptyPrompt, [])
         }
 
         var excerpts: [DocumentExcerpt] = []
@@ -64,7 +72,12 @@ public actor ContextBuilder {
             )
         }
 
-        let systemPrompt = buildSystemPrompt(vaultName: vaultName, excerpts: excerpts)
+        let systemPrompt: String
+        if let template = systemPromptTemplate {
+            systemPrompt = buildSystemPromptFromTemplate(template, vaultName: vaultName, excerpts: excerpts)
+        } else {
+            systemPrompt = buildSystemPrompt(vaultName: vaultName, excerpts: excerpts)
+        }
         return (systemPrompt, excerpts)
     }
 
@@ -231,6 +244,20 @@ public actor ContextBuilder {
     }
 
     // MARK: - System Prompt
+
+    /// Build system prompt from a custom template. Replaces `{vault_name}` and appends excerpts.
+    private func buildSystemPromptFromTemplate(
+        _ template: String,
+        vaultName: String,
+        excerpts: [DocumentExcerpt]
+    ) -> String {
+        var prompt = template.replacingOccurrences(of: "{vault_name}", with: vaultName)
+        prompt += "\n\nKnowledge base context:"
+        for excerpt in excerpts {
+            prompt += "\n\n--- [[" + excerpt.title + "]] ---\n" + excerpt.excerpt
+        }
+        return prompt
+    }
 
     private func buildSystemPrompt(vaultName: String, excerpts: [DocumentExcerpt]) -> String {
         var prompt = """
