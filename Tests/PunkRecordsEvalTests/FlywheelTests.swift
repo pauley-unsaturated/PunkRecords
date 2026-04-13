@@ -229,4 +229,111 @@ struct FlywheelTests {
         #expect(summary.contains("Recommendation"))
         #expect(summary.contains("Metrics"))
     }
+
+    // MARK: - End-to-end variant comparison
+
+    @Test("End-to-end compareVariantsMock produces matched reports and comparison")
+    func endToEndMockComparison() async throws {
+        let harness = EvalHarness()
+
+        let baselineVariant = PromptVariant.baseline
+        let candidateVariant = PromptVariant(
+            id: "terse-v1", name: "Terse", version: 1,
+            description: "Shorter responses",
+            template: "You are a terse research assistant for {vault_name}. Be brief.",
+            parentVariantID: "baseline-v1"
+        )
+
+        // One-scenario dataset
+        let scenario = EvalScenario(
+            id: "e2e-test",
+            name: "E2E Test",
+            description: "End-to-end smoke",
+            category: .simpleQA,
+            vaultDocuments: [],
+            userPrompt: "Say hi",
+            groundTruth: GroundTruth(turnRange: 1...1)
+        )
+        let script: [LLMToolResponse] = [
+            LLMToolResponse(
+                contentBlocks: [.text("Hi!")],
+                stopReason: .endTurn,
+                usage: TokenUsage(promptTokens: 100, completionTokens: 10)
+            )
+        ]
+
+        let result = try await harness.compareVariantsMock(
+            baseline: EvalHarness.VariantRun(variant: baselineVariant,
+                                              scenarioScripts: [(scenario, script)]),
+            candidate: EvalHarness.VariantRun(variant: candidateVariant,
+                                               scenarioScripts: [(scenario, script)])
+        )
+
+        #expect(result.baselineReport.promptVariantID == "baseline-v1")
+        #expect(result.candidateReport.promptVariantID == "terse-v1")
+        #expect(result.baselineReport.scenarioResults.count == 1)
+        #expect(result.candidateReport.scenarioResults.count == 1)
+        #expect(result.comparison.baselineVariantID == "baseline-v1")
+        #expect(result.comparison.candidateVariantID == "terse-v1")
+        // Scripted responses are identical → both reports should match
+        #expect(result.comparison.regressedScenarios.isEmpty)
+    }
+
+    @Test("End-to-end flow persists reports and variants through EvalResultStore")
+    func endToEndWithPersistence() async throws {
+        let (store, tempDir) = try makeTempStore()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let harness = EvalHarness()
+
+        let baseline = PromptVariant.baseline
+        let candidate = PromptVariant(
+            id: "detail-v1", name: "Detailed", version: 1,
+            description: "Longer responses",
+            template: "You are a thorough research assistant for {vault_name}.",
+            parentVariantID: "baseline-v1"
+        )
+
+        try store.save(baseline)
+        try store.save(candidate)
+
+        let scenario = EvalScenario(
+            id: "persist-test", name: "Persist Test", description: "",
+            category: .simpleQA, vaultDocuments: [],
+            userPrompt: "Test",
+            groundTruth: GroundTruth(turnRange: 1...1)
+        )
+        let script = [LLMToolResponse(
+            contentBlocks: [.text("OK")], stopReason: .endTurn,
+            usage: TokenUsage(promptTokens: 50, completionTokens: 5)
+        )]
+
+        let result = try await harness.compareVariantsMock(
+            baseline: EvalHarness.VariantRun(variant: baseline, scenarioScripts: [(scenario, script)]),
+            candidate: EvalHarness.VariantRun(variant: candidate, scenarioScripts: [(scenario, script)])
+        )
+
+        try store.save(result.baselineReport)
+        try store.save(result.candidateReport)
+
+        // Verify storage round-trips
+        let allReports = try store.loadAll()
+        #expect(allReports.count == 2)
+
+        let allVariants = try store.loadAllVariants()
+        #expect(allVariants.count == 2)
+
+        let baselineReports = try store.loadForVariant("baseline-v1")
+        let candidateReports = try store.loadForVariant("detail-v1")
+        #expect(baselineReports.count == 1)
+        #expect(candidateReports.count == 1)
+
+        // Recompute comparison from loaded data — should match
+        let recomputed = VariantComparator().compare(
+            baseline: baselineReports[0],
+            candidate: candidateReports[0]
+        )
+        #expect(recomputed.baselineVariantID == "baseline-v1")
+        #expect(recomputed.candidateVariantID == "detail-v1")
+    }
 }

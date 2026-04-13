@@ -25,11 +25,13 @@ public actor AgentLoop {
     }
 
     /// Run the agent loop, returning a stream of events for the UI.
+    /// Pass `systemPromptTemplate` to override the default ContextBuilder prompt for A/B eval testing.
     public func run(
         prompt: String,
         scope: QueryScope,
         currentDocumentID: DocumentID?,
-        selectedText: String?
+        selectedText: String?,
+        systemPromptTemplate: String? = nil
     ) -> AsyncThrowingStream<AgentEvent, Error> {
         let provider = self.provider
         let contextBuilder = self.contextBuilder
@@ -50,6 +52,7 @@ public actor AgentLoop {
                         tools: tools,
                         maxIterations: maxIterations,
                         vaultName: vaultName,
+                        systemPromptTemplate: systemPromptTemplate,
                         continuation: continuation
                     )
                 } catch is CancellationError {
@@ -74,18 +77,20 @@ public actor AgentLoop {
         tools: [String: any AgentTool],
         maxIterations: Int,
         vaultName: String,
+        systemPromptTemplate: String?,
         continuation: AsyncThrowingStream<AgentEvent, Error>.Continuation
     ) async throws {
         continuation.yield(.agentStart)
 
-        // Build vault context (same as the Q&A path)
+        // Build vault context (same as the Q&A path, with optional prompt template override)
         let maxTokens = await provider.maxContextTokens
         let (systemPrompt, excerpts) = try await contextBuilder.buildContext(
             prompt: prompt,
             scope: scope,
             currentDocumentID: currentDocumentID,
             maxTokens: maxTokens,
-            vaultName: vaultName
+            vaultName: vaultName,
+            systemPromptTemplate: systemPromptTemplate
         )
 
         // Build tool definitions

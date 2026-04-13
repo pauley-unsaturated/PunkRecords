@@ -8,9 +8,14 @@ public struct EvalHarness: Sendable {
     public init() {}
 
     /// Run a scenario with a scripted provider (fast, deterministic, no API cost).
+    ///
+    /// Note: scripted responses are independent of the prompt template, so passing a
+    /// variant only tags the result. Mock runs can't evaluate prompt quality — use
+    /// `runLive` with different variants to actually A/B test prompts.
     public func runMock(
         scenario: EvalScenario,
-        script: [LLMToolResponse]
+        script: [LLMToolResponse],
+        variant: PromptVariant? = nil
     ) async throws -> ScenarioResult {
         let mockRepo = MockDocumentRepository()
         let mockSearch = MockSearchService()
@@ -44,7 +49,8 @@ public struct EvalHarness: Sendable {
             prompt: scenario.userPrompt,
             scope: scenario.scope,
             currentDocumentID: scenario.currentDocumentID,
-            selectedText: nil
+            selectedText: nil,
+            systemPromptTemplate: variant?.template
         )
 
         let (metrics, finalText) = try await collector.collect(from: stream, scenarioID: scenario.id)
@@ -69,9 +75,11 @@ public struct EvalHarness: Sendable {
     }
 
     /// Run a scenario with a live provider (slow, costly, real metrics).
+    /// Pass `variant` to override the system prompt template and tag the result.
     public func runLive(
         scenario: EvalScenario,
-        provider: any LLMProvider
+        provider: any LLMProvider,
+        variant: PromptVariant? = nil
     ) async throws -> ScenarioResult {
         let mockRepo = MockDocumentRepository()
         let mockSearch = MockSearchService()
@@ -103,7 +111,8 @@ public struct EvalHarness: Sendable {
             prompt: scenario.userPrompt,
             scope: scenario.scope,
             currentDocumentID: scenario.currentDocumentID,
-            selectedText: nil
+            selectedText: nil,
+            systemPromptTemplate: variant?.template
         )
 
         let (metrics, finalText) = try await collector.collect(from: stream, scenarioID: scenario.id)
@@ -124,6 +133,78 @@ public struct EvalHarness: Sendable {
             failureReasons: failures,
             finalOutput: finalText
         )
+    }
+
+    // MARK: - End-to-end variant comparison
+
+    /// Configuration for a single variant run within a comparison.
+    public struct VariantRun: Sendable {
+        public let variant: PromptVariant
+        public let scenarioScripts: [(scenario: EvalScenario, script: [LLMToolResponse])]
+
+        public init(variant: PromptVariant,
+                    scenarioScripts: [(scenario: EvalScenario, script: [LLMToolResponse])]) {
+            self.variant = variant
+            self.scenarioScripts = scenarioScripts
+        }
+    }
+
+    /// Run a set of scenarios with two different prompt variants and compare the reports.
+    /// Uses scripted mock responses — for live A/B testing, see `compareVariantsLive`.
+    ///
+    /// Returns the two reports plus a comparison. All three are ready to persist via EvalResultStore.
+    public func compareVariantsMock(
+        baseline: VariantRun,
+        candidate: VariantRun
+    ) async throws -> (baselineReport: EvalReport, candidateReport: EvalReport, comparison: VariantComparison) {
+
+        var baselineResults: [ScenarioResult] = []
+        for pair in baseline.scenarioScripts {
+            let result = try await runMock(scenario: pair.scenario, script: pair.script, variant: baseline.variant)
+            baselineResults.append(result)
+        }
+
+        var candidateResults: [ScenarioResult] = []
+        for pair in candidate.scenarioScripts {
+            let result = try await runMock(scenario: pair.scenario, script: pair.script, variant: candidate.variant)
+            candidateResults.append(result)
+        }
+
+        let baselineReport = EvalReport(promptVariantID: baseline.variant.id, results: baselineResults)
+        let candidateReport = EvalReport(promptVariantID: candidate.variant.id, results: candidateResults)
+        let comparison = VariantComparator().compare(baseline: baselineReport, candidate: candidateReport)
+
+        return (baselineReport, candidateReport, comparison)
+    }
+
+    /// Run scenarios live against a real LLM provider with two prompt variants, return
+    /// both reports and their comparison.
+    ///
+    /// ⚠️ Cost: each scenario runs twice (once per variant). For N scenarios, that's 2·N live API calls.
+    public func compareVariantsLive(
+        baselineVariant: PromptVariant,
+        candidateVariant: PromptVariant,
+        scenarios: [EvalScenario],
+        provider: any LLMProvider
+    ) async throws -> (baselineReport: EvalReport, candidateReport: EvalReport, comparison: VariantComparison) {
+
+        var baselineResults: [ScenarioResult] = []
+        for scenario in scenarios {
+            let result = try await runLive(scenario: scenario, provider: provider, variant: baselineVariant)
+            baselineResults.append(result)
+        }
+
+        var candidateResults: [ScenarioResult] = []
+        for scenario in scenarios {
+            let result = try await runLive(scenario: scenario, provider: provider, variant: candidateVariant)
+            candidateResults.append(result)
+        }
+
+        let baselineReport = EvalReport(promptVariantID: baselineVariant.id, results: baselineResults)
+        let candidateReport = EvalReport(promptVariantID: candidateVariant.id, results: candidateResults)
+        let comparison = VariantComparator().compare(baseline: baselineReport, candidate: candidateReport)
+
+        return (baselineReport, candidateReport, comparison)
     }
 
     // MARK: - Ground Truth Evaluation
