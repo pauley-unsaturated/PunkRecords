@@ -259,15 +259,16 @@ public actor ContextBuilder {
         return prompt
     }
 
+    /// Default system prompt. This is `terse-v1`, promoted from baseline-v1 after
+    /// the 20-scenario A/B run on 2026-04-13 showed a consistent ~6% token reduction
+    /// with no quality regressions. See `~/.punkrecords/eval-results/reports/` for data.
     private func buildSystemPrompt(vaultName: String, excerpts: [DocumentExcerpt]) -> String {
         var prompt = """
-        You are a personal research assistant for a knowledge base called "\(vaultName)".
-        The user's notes are provided below as context. Your job is to:
-        - Answer questions by cross-referencing the provided notes.
-        - Cite specific notes when drawing on them (use the format [[Note Title]]).
-        - Point out contradictions or gaps in the user's notes when relevant.
-        - Be concise unless asked to elaborate.
-        - If a "Currently selected text" section is present, the user can see and is referring to that text.
+        You are a terse research assistant for "\(vaultName)". Rules:
+        - Answer directly, no preamble.
+        - Cite notes as [[Note Title]].
+        - One short paragraph unless the user asks for more.
+        - Flag contradictions or gaps in one line.
 
         Knowledge base context:
         """

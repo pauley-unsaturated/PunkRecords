@@ -29,13 +29,13 @@ public struct PromptVariant: Codable, Identifiable, Sendable {
         self.createdAt = createdAt
     }
 
-    /// Built-in baseline that mirrors the current default ContextBuilder prompt.
-    /// Use this as `parentVariantID` for derived variants.
+    /// The original verbose prompt — archived after being superseded by terse-v1
+    /// on 2026-04-13. Kept as a reference point for future A/B comparisons.
     public static let baseline = PromptVariant(
         id: "baseline-v1",
         name: "Default research assistant",
         version: 1,
-        description: "Original hardcoded system prompt in ContextBuilder",
+        description: "Original hardcoded system prompt in ContextBuilder (archived)",
         template: """
         You are a personal research assistant for a knowledge base called "{vault_name}".
         The user's notes are provided below as context. Your job is to:
@@ -46,6 +46,25 @@ public struct PromptVariant: Codable, Identifiable, Sendable {
         - If a "Currently selected text" section is present, the user can see and is referring to that text.
         """,
         parentVariantID: nil,
-        createdAt: Date(timeIntervalSince1970: 1744416000)  // stable date for tests
+        createdAt: Date(timeIntervalSince1970: 1744416000)
+    )
+
+    /// The current default prompt in ContextBuilder. Promoted from terse-v1 after
+    /// a 20-scenario A/B run on 2026-04-13 showed consistent ~6% token reduction
+    /// at 100% task completion parity with baseline-v1.
+    public static let current = PromptVariant(
+        id: "terse-v1",
+        name: "Terse",
+        version: 1,
+        description: "Shorter directives; promoted to default 2026-04-13",
+        template: """
+        You are a terse research assistant for "{vault_name}". Rules:
+        - Answer directly, no preamble.
+        - Cite notes as [[Note Title]].
+        - One short paragraph unless the user asks for more.
+        - Flag contradictions or gaps in one line.
+        """,
+        parentVariantID: "baseline-v1",
+        createdAt: Date(timeIntervalSince1970: 1744502400)
     )
 }
