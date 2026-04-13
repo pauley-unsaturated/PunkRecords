@@ -92,9 +92,11 @@ public actor SQLiteSearchIndex: SearchService {
                 SELECT
                     document_fts.id,
                     document_fts.title,
+                    document_meta.path as path,
                     snippet(document_fts, 2, '<mark>', '</mark>', '...', 32) as excerpt,
                     bm25(document_fts) as rank
                 FROM document_fts
+                LEFT JOIN document_meta ON document_fts.id = document_meta.id
                 WHERE document_fts MATCH ?
                 ORDER BY rank
                 LIMIT 50
@@ -106,6 +108,7 @@ public actor SQLiteSearchIndex: SearchService {
                 results.append(SearchResult(
                     documentID: id,
                     title: row["title"] as? String ?? "",
+                    path: row["path"] as? String ?? "",
                     excerpt: row["excerpt"] as? String ?? "",
                     score: abs(row["rank"] as? Float ?? 0) // bm25 returns negative scores
                 ))

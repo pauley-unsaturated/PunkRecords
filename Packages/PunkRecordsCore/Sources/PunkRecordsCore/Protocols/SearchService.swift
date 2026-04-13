@@ -3,6 +3,7 @@ import Foundation
 public struct SearchResult: Sendable {
     public let documentID: DocumentID
     public let title: String
+    public let path: RelativePath
     public let excerpt: String
     public let score: Float
     public let matchRanges: [Range<String.Index>]
@@ -10,12 +11,14 @@ public struct SearchResult: Sendable {
     public init(
         documentID: DocumentID,
         title: String,
+        path: RelativePath = "",
         excerpt: String,
         score: Float,
         matchRanges: [Range<String.Index>] = []
     ) {
         self.documentID = documentID
         self.title = title
+        self.path = path
         self.excerpt = excerpt
         self.score = score
         self.matchRanges = matchRanges
