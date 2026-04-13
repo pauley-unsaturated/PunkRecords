@@ -63,7 +63,10 @@ public struct EvalReport: Codable, Sendable, Identifiable {
     /// Serialize to JSON data for storage.
     public func toJSON() throws -> Data {
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(Self.isoFormatter.string(from: date))
+        }
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return try encoder.encode(self)
     }
@@ -71,7 +74,28 @@ public struct EvalReport: Codable, Sendable, Identifiable {
     /// Deserialize from JSON data.
     public static func fromJSON(_ data: Data) throws -> EvalReport {
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let string = try container.decode(String.self)
+            if let date = Self.isoFormatter.date(from: string) {
+                return date
+            }
+            // Fallback to second-precision ISO8601 for older reports
+            let fallback = ISO8601DateFormatter()
+            fallback.formatOptions = [.withInternetDateTime]
+            if let date = fallback.date(from: string) { return date }
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath,
+                                                    debugDescription: "Invalid date: \(string)"))
+        }
         return try decoder.decode(EvalReport.self, from: data)
     }
+
+    /// ISO8601 formatter with fractional seconds so JSON round-trip preserves ordering
+    /// for reports written in rapid succession.
+    /// `ISO8601DateFormatter` is thread-safe for reading even though Swift 6 can't prove it.
+    nonisolated(unsafe) private static let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
 }
