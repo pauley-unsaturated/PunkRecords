@@ -232,7 +232,10 @@ struct SearchQueryParser {
         var ftsQuery: String {
             var parts: [String] = []
             parts.append(contentsOf: terms.map { Self.sanitizeFTSTerm($0) }.filter { !$0.isEmpty })
-            parts.append(contentsOf: phrases.map { "\"\(Self.sanitizeFTSTerm($0))\"" })
+            parts.append(contentsOf: phrases.compactMap {
+                let clean = Self.sanitizeFTSTerm($0)
+                return clean.isEmpty ? nil : "\"\(clean)\""
+            })
             for excluded in excludedTerms {
                 let clean = Self.sanitizeFTSTerm(excluded)
                 if !clean.isEmpty { parts.append("NOT \(clean)") }
@@ -240,13 +243,19 @@ struct SearchQueryParser {
             return parts.joined(separator: " ")
         }
 
-        /// Strip characters that FTS5 interprets as query syntax operators.
-        private static func sanitizeFTSTerm(_ term: String) -> String {
-            let ftsSpecialChars = CharacterSet(charactersIn: "\"*?(){}[]^~:\\-+|&!")
+        /// FTS5 only accepts alphanumeric + underscore in unquoted terms. Everything
+        /// else is either an operator or a syntax error. Whitelist for defense in depth
+        /// (the parser should already split on non-word characters, but this ensures
+        /// nothing unexpected reaches FTS5).
+        fileprivate static func sanitizeFTSTerm(_ term: String) -> String {
+            let allowed = CharacterSet.alphanumerics
+                .union(.whitespaces)
+                .union(CharacterSet(charactersIn: "_"))
             return term.unicodeScalars
-                .filter { !ftsSpecialChars.contains($0) }
+                .filter { allowed.contains($0) }
                 .map { String($0) }
                 .joined()
+                .trimmingCharacters(in: .whitespaces)
         }
     }
 
@@ -254,7 +263,7 @@ struct SearchQueryParser {
         var result = ParsedQuery()
         var remaining = query
 
-        // Extract quoted phrases
+        // Extract quoted phrases first so internal punctuation is preserved
         let phrasePattern = #""([^"]+)""#
         if let regex = try? NSRegularExpression(pattern: phrasePattern) {
             let matches = regex.matches(in: remaining, range: NSRange(remaining.startIndex..., in: remaining))
@@ -269,20 +278,42 @@ struct SearchQueryParser {
             }
         }
 
-        // Parse remaining tokens
-        let tokens = remaining.split(separator: " ").map(String.init)
-        for token in tokens {
-            if token.hasPrefix("-") {
-                result.excludedTerms.append(String(token.dropFirst()))
-            } else if token.hasPrefix("tag:") {
-                result.tagFilter = String(token.dropFirst(4))
-            } else if token.hasPrefix("title:") {
-                result.titleFilter = String(token.dropFirst(6))
-            } else if !token.isEmpty {
-                result.terms.append(token)
+        // Tokenize on whitespace to detect operator prefixes (-, tag:, title:)
+        let rawTokens = remaining.split(separator: " ").map(String.init)
+        for rawToken in rawTokens {
+            if rawToken.hasPrefix("-") {
+                // Excluded: split remainder on non-word characters so punctuation doesn't leak through
+                let body = String(rawToken.dropFirst())
+                result.excludedTerms.append(contentsOf: Self.splitIntoWords(body))
+            } else if rawToken.hasPrefix("tag:") {
+                // Tag filter: take the first word after the prefix
+                let body = String(rawToken.dropFirst(4))
+                if let firstWord = Self.splitIntoWords(body).first {
+                    result.tagFilter = firstWord
+                }
+            } else if rawToken.hasPrefix("title:") {
+                let body = String(rawToken.dropFirst(6))
+                if let firstWord = Self.splitIntoWords(body).first {
+                    result.titleFilter = firstWord
+                }
+            } else {
+                // Plain term: split on non-word boundaries so "KNOWLEDGE-BASE.md,"
+                // yields ["KNOWLEDGE", "BASE", "md"] instead of one unsearchable blob.
+                result.terms.append(contentsOf: Self.splitIntoWords(rawToken))
             }
         }
 
         return result
+    }
+
+    /// Split a string into alphanumeric-only words, treating punctuation as word boundaries.
+    /// This is what lets us safely accept LLM-generated queries containing file paths, commas,
+    /// periods, and other characters that FTS5 rejects.
+    private static func splitIntoWords(_ s: String) -> [String] {
+        let wordChars = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_"))
+        return s.unicodeScalars
+            .split { !wordChars.contains($0) }
+            .map { String(String.UnicodeScalarView($0)) }
+            .filter { !$0.isEmpty }
     }
 }
