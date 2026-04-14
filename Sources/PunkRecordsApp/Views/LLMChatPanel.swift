@@ -37,9 +37,12 @@ struct LLMChatPanel: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(messages) { message in
-                            ChatBubble(message: message) {
-                                Task { await saveAsNote(message.content) }
-                            }
+                            ChatBubble(
+                                message: message,
+                                onSaveAsNote: { Task { await saveAsNote(message.content) } },
+                                onReportIssueCopy: { Task { await reportIssueCopy(message) } },
+                                onReportIssueSave: { Task { await reportIssueSave(message) } }
+                            )
                             .id(message.id)
                         }
                     }
@@ -118,8 +121,20 @@ struct LLMChatPanel: View {
             return
         }
 
+        // Snapshot the submission context. Attached to the assistant message so
+        // "Report Issue" can later reconstruct the full state that produced the response.
+        let context = MessageContext(
+            scope: scope,
+            scopeLabel: scopeLabel,
+            currentDocumentID: appState.selectedDocumentID,
+            selection: appState.selectedText,
+            wasAgentMode: isAgentMode,
+            variantID: "terse-v1",
+            userPrompt: text
+        )
+
         isStreaming = true
-        var assistantMessage = ChatMessage(role: .assistant, content: "")
+        var assistantMessage = ChatMessage(role: .assistant, content: "", context: context)
         messages.append(assistantMessage)
 
         if isAgentMode {
@@ -246,6 +261,38 @@ struct LLMChatPanel: View {
             appState.errorMessage = "Failed to save note: \(error.localizedDescription)"
         }
     }
+
+    /// Build an IssueReport for the given assistant message and prior conversation.
+    private func buildReport(for message: ChatMessage) async -> IssueReport? {
+        guard let context = message.context else { return nil }
+        // Include prior messages up to (but not including) the reported one.
+        let reportedIndex = messages.firstIndex(where: { $0.id == message.id }) ?? messages.count
+        let prior = messages.prefix(reportedIndex).map {
+            (role: $0.role == .user ? "user" : "assistant", content: $0.content)
+        }
+        return await IssueReporter.build(
+            assistantResponse: message.content,
+            context: context,
+            priorMessages: Array(prior),
+            appState: appState
+        )
+    }
+
+    private func reportIssueCopy(_ message: ChatMessage) async {
+        guard let report = await buildReport(for: message) else { return }
+        IssueReporter.copyToClipboard(report)
+        appState.errorMessage = "Issue report copied to clipboard."
+    }
+
+    private func reportIssueSave(_ message: ChatMessage) async {
+        guard let report = await buildReport(for: message) else { return }
+        do {
+            let url = try IssueReporter.save(report)
+            appState.errorMessage = "Issue saved to \(url.path)"
+        } catch {
+            appState.errorMessage = "Failed to save issue: \(error.localizedDescription)"
+        }
+    }
 }
 
 #Preview("Chat Panel — With Messages") {
@@ -266,6 +313,10 @@ struct ChatMessage: Identifiable {
     let id = UUID()
     let role: Role
     var content: String
+    let timestamp: Date = Date()
+    /// For assistant messages: snapshot of what the user did when submitting the
+    /// triggering prompt. Used by the "Report Issue" flow to reconstruct context.
+    var context: MessageContext? = nil
 
     enum Role {
         case user, assistant
@@ -275,6 +326,8 @@ struct ChatMessage: Identifiable {
 private struct ChatBubble: View {
     let message: ChatMessage
     let onSaveAsNote: () -> Void
+    let onReportIssueCopy: () -> Void
+    let onReportIssueSave: () -> Void
 
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
@@ -302,6 +355,23 @@ private struct ChatBubble: View {
                     }
                     .font(.caption)
                     .buttonStyle(.borderless)
+
+                    if message.context != nil {
+                        Menu {
+                            Button("Copy to Clipboard", systemImage: "doc.on.clipboard") {
+                                onReportIssueCopy()
+                            }
+                            Button("Save to File", systemImage: "square.and.arrow.down") {
+                                onReportIssueSave()
+                            }
+                        } label: {
+                            Label("Report Issue", systemImage: "flag")
+                                .font(.caption)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .help("Capture this turn's context as a bug report")
+                    }
                 }
             }
         }
