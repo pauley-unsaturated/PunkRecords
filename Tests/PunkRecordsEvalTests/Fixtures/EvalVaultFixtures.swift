@@ -734,9 +734,31 @@ enum EvalVaultFixtures {
         groundTruth: GroundTruth(turnRange: 1...6, requiredContent: ["task group"])
     )
 
+    /// Regression scenario for the FTS5 crash discovered 2026-04-13: user pastes a
+    /// file path with punctuation, asks a question that may prompt the LLM to search
+    /// the vault with punctuation-heavy terms. Ground truth is simply "agent completes
+    /// without a provider error" — the bug surfaced as an error bubble in chat.
+    static let s21_robustnessPunctuation = EvalScenario(
+        id: "tool-robustness-punctuation",
+        name: "Tool robustness: punctuation in search",
+        description: "LLM may search vault with punctuation; must not crash FTS5",
+        category: .vaultSearchSynthesize,
+        vaultDocuments: diverseVault,
+        queryResultMap: diverseQueryResults,
+        userPrompt: """
+        I have this path in one of my notes: `/Users/markpauley/Programs/Flatline/KNOWLEDGE-BASE.md`. \
+        We need to make this a link, right?
+        """,
+        groundTruth: GroundTruth(
+            turnRange: 1...6,
+            // Must not surface our own error plumbing in the response
+            forbiddenContent: ["SQLite error", "fts5: syntax", "providerError"]
+        )
+    )
+
     // MARK: - Collected scenario sets
 
-    /// Full 20-scenario diverse set for broad variant A/B comparison.
+    /// Full diverse set for broad variant A/B comparison.
     /// Cost: ~$0.30-0.60 per variant run (Sonnet 4.6, real API).
     static let diverseScenarios: [EvalScenario] = [
         s01_qaActorReentrancy, s02_qaSendableBrief, s03_qaTaskGroups, s04_qaDeepWork,
@@ -745,5 +767,6 @@ enum EvalVaultFixtures {
         s12_createSynthesis, s13_createNewTopic, s14_createFromMeeting,
         s15_critiqueGraphGaps, s16_critiqueContradictions, s17_critiqueCoverage,
         s18_edgeEmptyVault, s19_edgeAmbiguous, s20_edgeSpecificPhrase,
+        s21_robustnessPunctuation,
     ]
 }
