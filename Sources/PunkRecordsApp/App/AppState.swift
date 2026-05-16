@@ -100,7 +100,9 @@ final class AppState {
         let content = frontmatter + "\n\n# Untitled\n\n"
 
         Task {
-            let path = await Self.uniqueNotePath(in: repo, baseName: "Untitled")
+            let path = await FilenameHelpers.uniqueNotePath(baseName: "Untitled") { candidate in
+                (try? await repo.document(atPath: candidate)) != nil
+            }
             let doc = Document(
                 id: id,
                 title: "Untitled",
@@ -130,7 +132,7 @@ final class AppState {
         guard !titleMatches || !filenameMatches else { return }
 
         let folder = (doc.path as NSString).deletingLastPathComponent
-        let sanitized = Self.sanitizeFilename(trimmed)
+        let sanitized = FilenameHelpers.sanitizeFilename(trimmed)
         let newPath = folder.isEmpty ? "\(sanitized).md" : "\(folder)/\(sanitized).md"
         let isSamePath = newPath == doc.path
 
@@ -139,7 +141,7 @@ final class AppState {
             return
         }
 
-        let updatedContent = Self.replaceFirstH1(in: doc.content, with: trimmed)
+        let updatedContent = FilenameHelpers.replaceFirstH1(in: doc.content, with: trimmed)
         let updatedDoc = Document(
             id: doc.id,
             title: trimmed,
@@ -230,58 +232,5 @@ final class AppState {
 
     private func pathTitle(for doc: Document) -> String {
         ((doc.path as NSString).lastPathComponent as NSString).deletingPathExtension
-    }
-
-    private static func uniqueNotePath(in repo: FileSystemDocumentRepository, baseName: String) async -> String {
-        var candidate = "\(baseName).md"
-        var n = 2
-        while (try? await repo.document(atPath: candidate)) != nil {
-            candidate = "\(baseName) \(n).md"
-            n += 1
-        }
-        return candidate
-    }
-
-    private static func sanitizeFilename(_ name: String) -> String {
-        let invalid = CharacterSet(charactersIn: "/\\:*?\"<>|")
-        return name.components(separatedBy: invalid).joined(separator: "-")
-    }
-
-    /// Replace the first H1 in the body (post-frontmatter). If no H1 exists, insert one.
-    static func replaceFirstH1(in content: String, with newTitle: String) -> String {
-        let lines = content.components(separatedBy: "\n")
-        var bodyStart = 0
-
-        if lines.first?.trimmingCharacters(in: .whitespaces) == "---" {
-            for i in 1..<lines.count where lines[i].trimmingCharacters(in: .whitespaces) == "---" {
-                bodyStart = i + 1
-                break
-            }
-        }
-
-        var result = Array(lines[0..<bodyStart])
-        var replaced = false
-        for i in bodyStart..<lines.count {
-            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
-            if !replaced && trimmed.hasPrefix("# ") && !trimmed.hasPrefix("##") {
-                result.append("# \(newTitle)")
-                replaced = true
-            } else {
-                result.append(lines[i])
-            }
-        }
-
-        if !replaced {
-            var insertAt = bodyStart
-            while insertAt < result.count && result[insertAt].trimmingCharacters(in: .whitespaces).isEmpty {
-                insertAt += 1
-            }
-            result.insert("# \(newTitle)", at: insertAt)
-            if insertAt + 1 >= result.count || !result[insertAt + 1].isEmpty {
-                result.insert("", at: insertAt + 1)
-            }
-        }
-
-        return result.joined(separator: "\n")
     }
 }
