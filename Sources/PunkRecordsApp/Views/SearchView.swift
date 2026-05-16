@@ -35,7 +35,9 @@ struct SearchView: View {
             } else {
                 List(results, id: \.documentID) { result in
                     Button {
-                        appState.selectedDocumentID = result.documentID
+                        if let path = appState.documents.first(where: { $0.id == result.documentID })?.path {
+                            appState.selectedDocumentPath = path
+                        }
                         dismiss()
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {

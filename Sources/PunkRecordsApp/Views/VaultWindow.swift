@@ -12,13 +12,13 @@ struct VaultWindow: View {
             VaultBrowserView()
         } detail: {
             HStack(spacing: 0) {
-                if let docID = appState.selectedDocumentID {
+                if let doc = appState.selectedDocument {
                     VStack(spacing: 0) {
-                        RawEditorView(documentID: docID)
+                        RawEditorView(documentPath: doc.path)
 
                         if appState.isBacklinksPanelVisible {
                             Divider()
-                            BacklinksPanel(documentID: docID)
+                            BacklinksPanel(documentID: doc.id)
                                 .frame(height: 180)
                                 .accessibilityIdentifier("backlinksPanel")
                         }

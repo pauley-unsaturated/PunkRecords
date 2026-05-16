@@ -89,7 +89,7 @@ struct LLMChatPanel: View {
     private var scopePicker: some View {
         Menu {
             Button("Entire KB") { scope = .global }
-            if let docID = appState.selectedDocumentID {
+            if let docID = appState.selectedDocument?.id {
                 Button("Current Document") { scope = .document(docID) }
             }
         } label: {
@@ -126,7 +126,7 @@ struct LLMChatPanel: View {
         let context = MessageContext(
             scope: scope,
             scopeLabel: scopeLabel,
-            currentDocumentID: appState.selectedDocumentID,
+            currentDocumentID: appState.selectedDocument?.id,
             selection: appState.selectedText,
             wasAgentMode: isAgentMode,
             variantID: "terse-v1",
@@ -152,7 +152,7 @@ struct LLMChatPanel: View {
                 prompt: text,
                 selectedText: appState.selectedText,
                 scope: scope,
-                currentDocumentID: appState.selectedDocumentID
+                currentDocumentID: appState.selectedDocument?.id
             )
 
             for try await event in stream {
@@ -206,7 +206,7 @@ struct LLMChatPanel: View {
             let stream = await agentLoop.run(
                 prompt: text,
                 scope: scope,
-                currentDocumentID: appState.selectedDocumentID,
+                currentDocumentID: appState.selectedDocument?.id,
                 selectedText: appState.selectedText
             )
 
@@ -253,10 +253,10 @@ struct LLMChatPanel: View {
         do {
             let doc = try await compiler.saveResponseAsNote(
                 responseText: content,
-                sourceDocumentID: appState.selectedDocumentID,
+                sourceDocumentID: appState.selectedDocument?.id,
                 folderPath: ""
             )
-            appState.selectedDocumentID = doc.id
+            appState.selectedDocumentPath = doc.path
         } catch {
             appState.errorMessage = "Failed to save note: \(error.localizedDescription)"
         }

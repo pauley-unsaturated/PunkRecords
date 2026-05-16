@@ -4,7 +4,7 @@ import PunkRecordsCore
 import PunkRecordsInfra
 
 struct RawEditorView: View {
-    let documentID: DocumentID
+    let documentPath: RelativePath
     @Environment(AppState.self) private var appState
     @State private var viewModel: DocumentEditorViewModel?
 
@@ -47,7 +47,7 @@ struct RawEditorView: View {
                 .help("Toggle AI Chat Panel")
             }
         }
-        .task(id: documentID) {
+        .task(id: documentPath) {
             await loadDocument()
         }
     }
@@ -61,7 +61,7 @@ struct RawEditorView: View {
                 sourceTitle: vm.document.title,
                 folderPath: ""
             )
-            appState.selectedDocumentID = doc.id
+            appState.selectedDocumentPath = doc.path
         } catch {
             appState.errorMessage = "Failed to compile note: \(error.localizedDescription)"
         }
@@ -70,7 +70,7 @@ struct RawEditorView: View {
     private func loadDocument() async {
         guard let repo = appState.repository else { return }
         do {
-            if let doc = try await repo.document(withID: documentID) {
+            if let doc = try await repo.document(atPath: documentPath) {
                 viewModel = DocumentEditorViewModel(
                     document: doc,
                     repository: repo,

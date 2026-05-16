@@ -20,7 +20,7 @@ struct BacklinksPanel: View {
             } else {
                 List(backlinks) { doc in
                     Button {
-                        appState.selectedDocumentID = doc.id
+                        appState.selectedDocumentPath = doc.path
                     } label: {
                         Label(doc.title, systemImage: "doc.text")
                     }

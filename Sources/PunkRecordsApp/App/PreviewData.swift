@@ -197,7 +197,8 @@ enum PreviewData {
                 name: "Preview Vault",
                 rootURL: previewVaultURL
             )
-            state.selectedDocumentID = sampleDocumentID
+            state.documents = allDocuments
+            state.selectedDocumentPath = sampleDocument.path
         }
         return state
     }
@@ -209,7 +210,7 @@ enum PreviewData {
         let state = AppState()
         let url = previewVaultURL
         state.currentVault = Vault(name: "Preview Vault", rootURL: url)
-        state.selectedDocumentID = sampleDocumentID
+        state.selectedDocumentPath = sampleDocument.path
         state.configureForPreview(vaultRoot: url)
         return state
     }
