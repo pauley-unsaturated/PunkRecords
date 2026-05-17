@@ -8,6 +8,7 @@ struct LLMChatPanel: View {
     @State private var isStreaming = false
     @State private var scope: QueryScope = .global
     @State private var isAgentMode = false
+    @AppStorage("webSearchEnabled") private var isWebSearchEnabled = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,6 +21,11 @@ struct LLMChatPanel: View {
                     .toggleStyle(.switch)
                     .controlSize(.mini)
                     .help("When enabled, the AI can search your vault, read documents, and create notes autonomously.")
+                Toggle("Web", isOn: $isWebSearchEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .disabled(!isAgentMode)
+                    .help("When in Agent mode, let the AI search the web (Anthropic native web search).")
                 scopePicker
                 Button("Close", systemImage: "xmark.circle.fill") {
                     appState.isChatPanelVisible = false
@@ -208,7 +214,8 @@ struct LLMChatPanel: View {
                 prompt: text,
                 scope: scope,
                 currentDocumentID: appState.selectedDocument?.id,
-                selectedText: appState.selectedText
+                selectedText: appState.selectedText,
+                enableWebSearch: isWebSearchEnabled
             )
 
             // Index of the current assistant text bubble being appended to. nil after a tool

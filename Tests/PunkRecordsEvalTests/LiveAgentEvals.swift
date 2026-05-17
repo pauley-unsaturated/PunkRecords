@@ -267,6 +267,47 @@ struct LiveAgentEvals {
 
     // MARK: - Combined Report
 
+    /// Live exercise of the Anthropic native web_search server tool. The exact answer
+    /// is intentionally not asserted (it's the live web) — we just verify the agent
+    /// elects to call web_search for a research-flavoured prompt the vault can't answer.
+    @Test("Live: research prompt triggers web_search when enabled")
+    func liveWebSearchTriggers() async throws {
+        try Self.requireAPIKey()
+
+        let factory = TempVaultFactory()
+        let (vault, cleanup) = try factory.createTempVault()
+        defer { cleanup() }
+
+        let repo = FileSystemDocumentRepository(vaultRoot: vault.rootURL)
+        let index = try SQLiteSearchIndex(vaultRoot: vault.rootURL)
+        let contextBuilder = ContextBuilder(searchService: index, repository: repo)
+        let provider = AnthropicProvider(keychainService: Self.keychain)
+
+        let agent = AgentLoop(
+            provider: provider,
+            contextBuilder: contextBuilder,
+            tools: [],
+            vaultName: "Test"
+        )
+
+        var webSearchCalls = 0
+        let stream = await agent.run(
+            prompt: "What's the latest stable Swift release? Use web search to confirm.",
+            scope: .global,
+            currentDocumentID: nil,
+            selectedText: nil,
+            enableWebSearch: true
+        )
+        for try await event in stream {
+            if case let .toolStart(name, _) = event, name == "web_search" {
+                webSearchCalls += 1
+            }
+        }
+
+        print("[WEB-SEARCH] web_search invocations: \(webSearchCalls)")
+        #expect(webSearchCalls >= 1, "Expected the agent to call web_search for a 'use web search to confirm' prompt")
+    }
+
     @Test("Live: aggregate report across all scenarios")
     func liveAggregateReport() async throws {
         try Self.requireAPIKey()

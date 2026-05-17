@@ -154,6 +154,11 @@ public actor AnthropicProvider: LLMProvider {
                         ]
                         if isError { resultBlock["is_error"] = true }
                         contentArray.append(resultBlock)
+                    case .serverToolUse, .serverToolResult:
+                        // Server-managed tool blocks are echoes of the provider's
+                        // own work; don't re-send them on follow-up turns. The
+                        // model regenerates them if it still needs them.
+                        break
                     }
                 }
                 messages.append(["role": msg.role.rawValue, "content": contentArray])
@@ -180,8 +185,15 @@ public actor AnthropicProvider: LLMProvider {
         if let systemPrompt = request.systemPrompt {
             body["system"] = buildCacheableSystemPrompt(systemPrompt)
         }
+        var toolsArray: [[String: Any]] = []
         if let tools = request.tools, !tools.isEmpty {
-            body["tools"] = cacheableTools(tools)
+            toolsArray.append(contentsOf: cacheableTools(tools))
+        }
+        if let serverTools = request.serverTools {
+            toolsArray.append(contentsOf: serverToolSpecs(serverTools))
+        }
+        if !toolsArray.isEmpty {
+            body["tools"] = toolsArray
         }
 
         let urlRequest = try buildURLRequest(url: url, apiKey: apiKey, body: body)
@@ -209,6 +221,25 @@ public actor AnthropicProvider: LLMProvider {
                             id: blockID,
                             name: name,
                             input: SendableValue.from(jsonObject: input)
+                        ))
+                    }
+                case "server_tool_use":
+                    if let blockID = block["id"] as? String,
+                       let name = block["name"] as? String,
+                       let input = block["input"] as? [String: Any] {
+                        contentBlocks.append(.serverToolUse(
+                            id: blockID,
+                            name: name,
+                            input: SendableValue.from(jsonObject: input)
+                        ))
+                    }
+                case "web_search_tool_result":
+                    if let toolUseID = block["tool_use_id"] as? String {
+                        let (content, isError) = formatWebSearchResult(block["content"])
+                        contentBlocks.append(.serverToolResult(
+                            toolUseID: toolUseID,
+                            content: content,
+                            isError: isError
                         ))
                     }
                 default:
@@ -252,6 +283,45 @@ public actor AnthropicProvider: LLMProvider {
             "text": systemPrompt,
             "cache_control": ["type": "ephemeral"]
         ]]
+    }
+
+    /// Wire spec for Anthropic-native server tools. Appended after local tools
+    /// so the cache_control on the last local tool still caches the prefix.
+    private func serverToolSpecs(_ tools: [ServerToolConfig]) -> [[String: Any]] {
+        tools.map { tool in
+            switch tool {
+            case .webSearch(let maxUses):
+                var spec: [String: Any] = [
+                    "type": "web_search_20250305",
+                    "name": "web_search"
+                ]
+                if let maxUses { spec["max_uses"] = maxUses }
+                return spec
+            }
+        }
+    }
+
+    /// Convert a web_search_tool_result `content` field into a (text, isError) tuple
+    /// for our ContentBlock.serverToolResult representation. Success comes back as an
+    /// array of result objects; errors come as a single object with an error_code.
+    private func formatWebSearchResult(_ content: Any?) -> (String, Bool) {
+        if let results = content as? [[String: Any]] {
+            let lines = results.compactMap { result -> String? in
+                guard let title = result["title"] as? String,
+                      let url = result["url"] as? String else { return nil }
+                var line = "• \(title)\n  \(url)"
+                if let age = result["page_age"] as? String {
+                    line += "\n  \(age)"
+                }
+                return line
+            }
+            return (lines.isEmpty ? "No results" : lines.joined(separator: "\n\n"), false)
+        }
+        if let err = content as? [String: Any],
+           let code = err["error_code"] as? String {
+            return ("Web search error: \(code)", true)
+        }
+        return ("Unrecognized web search response", true)
     }
 
     /// Mark the last tool with cache_control so the entire tools array is cached.

@@ -26,12 +26,15 @@ public actor AgentLoop {
 
     /// Run the agent loop, returning a stream of events for the UI.
     /// Pass `systemPromptTemplate` to override the default ContextBuilder prompt for A/B eval testing.
+    /// Pass `enableWebSearch: true` to attach the provider's native web search server tool
+    /// (currently Anthropic-only; other providers silently ignore it).
     public func run(
         prompt: String,
         scope: QueryScope,
         currentDocumentID: DocumentID?,
         selectedText: String?,
-        systemPromptTemplate: String? = nil
+        systemPromptTemplate: String? = nil,
+        enableWebSearch: Bool = false
     ) -> AsyncThrowingStream<AgentEvent, Error> {
         let provider = self.provider
         let contextBuilder = self.contextBuilder
@@ -53,6 +56,7 @@ public actor AgentLoop {
                         maxIterations: maxIterations,
                         vaultName: vaultName,
                         systemPromptTemplate: systemPromptTemplate,
+                        enableWebSearch: enableWebSearch,
                         continuation: continuation
                     )
                 } catch is CancellationError {
@@ -78,6 +82,7 @@ public actor AgentLoop {
         maxIterations: Int,
         vaultName: String,
         systemPromptTemplate: String?,
+        enableWebSearch: Bool,
         continuation: AsyncThrowingStream<AgentEvent, Error>.Continuation
     ) async throws {
         continuation.yield(.agentStart)
@@ -114,6 +119,8 @@ public actor AgentLoop {
 
         var finalText = ""
 
+        let serverTools: [ServerToolConfig]? = enableWebSearch ? [.webSearch(maxUses: 5)] : nil
+
         for turnIndex in 0..<maxIterations {
             try Task.checkCancellation()
             continuation.yield(.turnStart(turnIndex: turnIndex))
@@ -125,19 +132,43 @@ public actor AgentLoop {
                 contextDocuments: excerpts,
                 streamResponse: false,
                 tools: toolDefs,
-                messages: conversationMessages
+                messages: conversationMessages,
+                serverTools: serverTools
             )
 
             let response = try await provider.completeWithTools(request)
 
-            // Emit text content
-            let textContent = response.textContent
-            if !textContent.isEmpty {
-                continuation.yield(.textToken(textContent))
-                finalText += textContent
+            // Emit events in document order so server-tool calls appear between
+            // text segments rather than after them.
+            var serverToolNames: [String: String] = [:]
+            for block in response.contentBlocks {
+                switch block {
+                case .text(let token):
+                    if !token.isEmpty {
+                        continuation.yield(.textToken(token))
+                        finalText += token
+                    }
+                case .serverToolUse(let id, let name, let input):
+                    serverToolNames[id] = name
+                    continuation.yield(.toolStart(
+                        name: name,
+                        arguments: Self.encodeArgs(input.toPlainDict())
+                    ))
+                case .serverToolResult(let toolUseID, let content, let isError):
+                    let name = serverToolNames[toolUseID] ?? "web_search"
+                    continuation.yield(.toolEnd(
+                        name: name,
+                        result: ToolResult(content: content, isError: isError)
+                    ))
+                case .toolUse, .toolResult:
+                    // Local tool calls are handled in the second pass below so we
+                    // can also dispatch their execution; tool_result blocks only
+                    // appear in messages we *send*, not in responses we receive.
+                    break
+                }
             }
 
-            // If the LLM stopped without requesting tool use, we're done
+            // If the LLM stopped without requesting a (local) tool, we're done
             if response.stopReason == .endTurn || response.stopReason == .maxTokens {
                 continuation.yield(.turnEnd(turnIndex: turnIndex))
                 continuation.yield(.done(finalText: finalText))
@@ -158,14 +189,16 @@ public actor AgentLoop {
                 content: response.contentBlocks
             ))
 
-            // Execute each tool call and collect results
+            // Execute each local tool call and collect results
             var toolResultBlocks: [ContentBlock] = []
 
             for toolCall in response.toolUseBlocks {
                 try Task.checkCancellation()
 
-                let argsDescription = String(describing: toolCall.input.toPlainDict())
-                continuation.yield(.toolStart(name: toolCall.name, arguments: argsDescription))
+                continuation.yield(.toolStart(
+                    name: toolCall.name,
+                    arguments: Self.encodeArgs(toolCall.input.toPlainDict())
+                ))
 
                 let result: ToolResult
                 if let tool = tools[toolCall.name] {
@@ -205,5 +238,17 @@ public actor AgentLoop {
         continuation.yield(.error(.maxIterationsExceeded(maxIterations)))
         continuation.yield(.done(finalText: finalText))
         continuation.finish()
+    }
+
+    /// JSON-encode tool arguments as a stable string. Falls back to "{}" if the
+    /// dict isn't JSON-serialisable for some reason.
+    private static func encodeArgs(_ args: [String: Any]) -> String {
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: args,
+            options: [.sortedKeys]
+        ), let s = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return s
     }
 }

@@ -58,6 +58,12 @@ public enum ContentBlock: Sendable, Equatable {
     case text(String)
     case toolUse(id: String, name: String, input: [String: SendableValue])
     case toolResult(toolUseID: String, content: String, isError: Bool)
+    /// A provider-managed tool invocation (e.g. Anthropic's native web_search).
+    /// The provider executes these server-side; the client only renders them.
+    case serverToolUse(id: String, name: String, input: [String: SendableValue])
+    /// Result of a provider-managed tool invocation. Already executed server-side
+    /// by the time it reaches us; we just display it.
+    case serverToolResult(toolUseID: String, content: String, isError: Bool)
 }
 
 // MARK: - Conversation Messages

@@ -16,6 +16,7 @@ struct ToolCallInfo: Sendable {
         case "read_document":  "doc.text"
         case "create_note":    "square.and.pencil"
         case "list_documents": "list.bullet"
+        case "web_search":     "globe"
         default:               "wrench.and.screwdriver"
         }
     }
@@ -27,6 +28,7 @@ struct ToolCallInfo: Sendable {
         case "read_document":  "Read document"
         case "create_note":    "Create note"
         case "list_documents": "List documents"
+        case "web_search":     "Web search"
         default:               name.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
@@ -38,7 +40,7 @@ struct ToolCallInfo: Sendable {
         else { return "" }
 
         switch name {
-        case "vault_search":
+        case "vault_search", "web_search":
             if let q = json["query"] as? String { return "“\(q)”" }
         case "read_document":
             if let path = json["path"] as? String { return path }
