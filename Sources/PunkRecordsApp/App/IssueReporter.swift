@@ -9,7 +9,6 @@ struct MessageContext: Sendable {
     let scopeLabel: String
     let currentDocumentID: DocumentID?
     let selection: String?
-    let wasAgentMode: Bool
     let variantID: String
     let userPrompt: String
 }
@@ -59,7 +58,6 @@ struct IssueReporter {
         lines.append("**App version:** \(report.appVersion)")
         lines.append("**macOS:** \(report.osVersion)")
         lines.append("**Prompt variant:** `\(ctx.variantID)`")
-        lines.append("**Mode:** \(ctx.wasAgentMode ? "Agent" : "Chat")")
         lines.append("**Scope:** \(ctx.scopeLabel)")
         if let title = report.currentDocumentTitle {
             lines.append("**Current document:** \(title)" + (report.currentDocumentPath.map { " (`\($0)`)" } ?? ""))

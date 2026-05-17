@@ -7,7 +7,6 @@ struct LLMChatPanel: View {
     @State private var messages: [ChatMessage] = []
     @State private var isStreaming = false
     @State private var scope: QueryScope = .global
-    @State private var isAgentMode = false
     @AppStorage("webSearchEnabled") private var isWebSearchEnabled = false
 
     var body: some View {
@@ -17,15 +16,10 @@ struct LLMChatPanel: View {
                 Text("AI Chat")
                     .font(.headline)
                 Spacer()
-                Toggle("Agent", isOn: $isAgentMode)
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .help("When enabled, the AI can search your vault, read documents, and create notes autonomously.")
                 Toggle("Web", isOn: $isWebSearchEnabled)
                     .toggleStyle(.switch)
                     .controlSize(.mini)
-                    .disabled(!isAgentMode)
-                    .help("When in Agent mode, let the AI search the web (Anthropic native web search).")
+                    .help("Let the AI search the web (Anthropic native web search).")
                 scopePicker
                 Button("Close", systemImage: "xmark.circle.fill") {
                     appState.isChatPanelVisible = false
@@ -140,50 +134,13 @@ struct LLMChatPanel: View {
             scopeLabel: scopeLabel,
             currentDocumentID: appState.selectedDocument?.id,
             selection: appState.selectedText,
-            wasAgentMode: isAgentMode,
             variantID: "terse-v1",
             userPrompt: text
         )
 
         isStreaming = true
-        if isAgentMode {
-            await sendAgentMessage(text, orchestrator: orchestrator, context: context)
-        } else {
-            var assistantMessage = ChatMessage(role: .assistant, content: "", context: context)
-            messages.append(assistantMessage)
-            await sendSimpleMessage(text, orchestrator: orchestrator, assistantMessage: &assistantMessage)
-        }
+        await sendAgentMessage(text, orchestrator: orchestrator, context: context)
         isStreaming = false
-    }
-
-    private func sendSimpleMessage(_ text: String, orchestrator: LLMOrchestrator, assistantMessage: inout ChatMessage) async {
-        do {
-            let stream = try await orchestrator.ask(
-                prompt: text,
-                selectedText: appState.selectedText,
-                scope: scope,
-                currentDocumentID: appState.selectedDocument?.id
-            )
-
-            for try await event in stream {
-                switch event {
-                case .token(let token):
-                    assistantMessage.content += token
-                    if let lastIndex = messages.indices.last {
-                        messages[lastIndex] = assistantMessage
-                    }
-                case .done:
-                    break
-                case .citation, .error:
-                    break
-                }
-            }
-        } catch {
-            assistantMessage.content += "\n\n*Error: \(error.localizedDescription)*"
-            if let lastIndex = messages.indices.last {
-                messages[lastIndex] = assistantMessage
-            }
-        }
     }
 
     private func sendAgentMessage(_ text: String, orchestrator: LLMOrchestrator, context: MessageContext) async {
