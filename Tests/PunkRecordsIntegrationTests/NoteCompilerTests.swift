@@ -107,6 +107,122 @@ struct NoteCompilerTests {
         #expect(saved.count == 1)
     }
 
+    @Test("Web citations in the source are kept when the LLM preserves them")
+    func webCitationsKeptWhenLLMPreserves() async throws {
+        let llmOutput = """
+        ---
+        tags: [swift]
+        ---
+        # Swift Concurrency
+
+        Apple documents the model in [Swift concurrency](https://swift.org/concurrency).
+        """
+
+        let (compiler, _) = await makeCompiler(llmResponse: llmOutput)
+        let source = "Apple documents the model in [Swift concurrency](https://swift.org/concurrency)."
+
+        let doc = try await compiler.saveResponseAsNote(
+            responseText: source,
+            sourceDocumentID: nil,
+            folderPath: ""
+        )
+
+        #expect(doc.content.contains("https://swift.org/concurrency"))
+        // No backstop section needed when the LLM didn't drop anything.
+        #expect(!doc.content.contains("## Sources"))
+    }
+
+    @Test("Dropped web citations are recovered in a Sources section")
+    func droppedWebCitationsRecovered() async throws {
+        // LLM strips the inline citation.
+        let llmOutput = """
+        ---
+        tags: [swift]
+        ---
+        # Swift Concurrency
+
+        Swift uses actors and async/await.
+        """
+
+        let (compiler, _) = await makeCompiler(llmResponse: llmOutput)
+        let source = """
+            Swift uses actors and async/await. See [Swift concurrency](https://swift.org/concurrency)
+            and [WWDC 2021 transcript](https://developer.apple.com/wwdc21/10132) for details.
+            """
+
+        let doc = try await compiler.saveResponseAsNote(
+            responseText: source,
+            sourceDocumentID: nil,
+            folderPath: ""
+        )
+
+        #expect(doc.content.contains("## Sources"))
+        #expect(doc.content.contains("https://swift.org/concurrency"))
+        #expect(doc.content.contains("https://developer.apple.com/wwdc21/10132"))
+    }
+
+    @Test("Dropped vault wikilinks are recovered in the Sources section")
+    func droppedWikilinksRecovered() async throws {
+        let llmOutput = """
+        ---
+        tags: [graphs]
+        ---
+        # Graph Theory Basics
+
+        A graph is a set of nodes and edges.
+        """
+
+        let (compiler, _) = await makeCompiler(llmResponse: llmOutput)
+        let source = """
+            A graph is a set of nodes and edges. See [[Directed Graphs]] and
+            [[Adjacency Lists]] for representations.
+            """
+
+        let doc = try await compiler.saveResponseAsNote(
+            responseText: source,
+            sourceDocumentID: nil,
+            folderPath: ""
+        )
+
+        #expect(doc.content.contains("## Sources"))
+        #expect(doc.content.contains("[[Directed Graphs"))
+        #expect(doc.content.contains("[[Adjacency Lists"))
+    }
+
+    @Test("Citation backstop survives a partial drop")
+    func citationBackstopOnPartialDrop() async throws {
+        // LLM keeps one citation, drops the other.
+        let llmOutput = """
+        ---
+        tags: [bio]
+        ---
+        # Mitosis
+
+        Mitosis was first described in detail by [Walther Flemming](https://en.wikipedia.org/wiki/Walther_Flemming).
+        """
+
+        let (compiler, _) = await makeCompiler(llmResponse: llmOutput)
+        let source = """
+            Mitosis was first described in detail by
+            [Walther Flemming](https://en.wikipedia.org/wiki/Walther_Flemming).
+            For modern molecular detail, see [Cell cycle review](https://example.org/cell-cycle).
+            """
+
+        let doc = try await compiler.saveResponseAsNote(
+            responseText: source,
+            sourceDocumentID: nil,
+            folderPath: ""
+        )
+
+        // Both URLs must end up in the final note exactly once.
+        let occurrencesWalther = doc.content.components(separatedBy: "Walther_Flemming").count - 1
+        let occurrencesCellCycle = doc.content.components(separatedBy: "example.org/cell-cycle").count - 1
+        #expect(occurrencesWalther == 1)
+        #expect(occurrencesCellCycle == 1)
+        // Backstop fires because at least one citation was dropped.
+        #expect(doc.content.contains("## Sources"))
+    }
+
     @Test("sanitizes invalid filename characters")
     func filenamesSanitized() async throws {
         let llmOutput = """

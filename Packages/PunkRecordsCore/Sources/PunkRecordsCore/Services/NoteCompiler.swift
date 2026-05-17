@@ -18,11 +18,17 @@ public actor NoteCompiler {
     }
 
     /// Creates a new note from an LLM response. The LLM generates title, tags, and wikilinks.
+    /// Citations in the source (vault `[[wikilinks]]` and inline web `[Title](url)` links)
+    /// are preserved end-to-end: the prompt instructs the model to keep them, and any
+    /// dropped citations are appended as a "## Sources" section as a safety net.
     public func saveResponseAsNote(
         responseText: String,
         sourceDocumentID: DocumentID?,
         folderPath: RelativePath
     ) async throws -> Document {
+        let sourceWikilinks = parser.parseWikilinks(from: responseText)
+        let sourceWebLinks = parser.parseMarkdownLinks(from: responseText)
+
         // Ask the LLM to structure the response as a wiki article
         let structurePrompt = """
         Convert the following text into a structured wiki article in markdown format.
@@ -33,8 +39,11 @@ public actor NoteCompiler {
           ---
         - Follow the frontmatter with a descriptive H1 title (# Title)
         - Add [[wikilinks]] to concepts that could be their own notes
+        - Preserve every citation present in the source text:
+          - Keep all existing [[wikilinks]] to vault notes intact
+          - Keep all existing web citations as inline markdown links [Title](url); never drop or rename them
         - Organize with clear sections (## headings) if the content warrants it
-        - Keep the content faithful to the original; do not add information
+        - Keep the content faithful to the original; do not add information or invent sources
         - Output ONLY the markdown article, no preamble or explanation
 
         Text to convert:
@@ -46,8 +55,18 @@ public actor NoteCompiler {
             scope: .global
         )
 
-        let compiledContent = response.text
-        let parsed = parser.parse(content: compiledContent, filename: "Untitled")
+        var compiledBody = parser.parse(content: response.text, filename: "Untitled").body
+        compiledBody = appendingMissingCitations(
+            to: compiledBody,
+            sourceWikilinks: sourceWikilinks,
+            sourceWebLinks: sourceWebLinks
+        )
+
+        // Re-parse so the title is taken from the (possibly amended) body.
+        let parsed = parser.parse(
+            content: compiledBody,
+            filename: "Untitled"
+        )
 
         let id = DocumentID()
         let now = Date()
@@ -58,7 +77,7 @@ public actor NoteCompiler {
             modified: now
         )
 
-        let finalContent = frontmatter + "\n\n" + parsed.body
+        let finalContent = frontmatter + "\n\n" + compiledBody
         let filename = sanitizeFilename(parsed.title) + ".md"
         let path = folderPath.isEmpty ? filename : folderPath + "/" + filename
 
@@ -76,6 +95,41 @@ public actor NoteCompiler {
 
         try await repository.save(document)
         return document
+    }
+
+    /// Append a "## Sources" section if the compiled body dropped any of the
+    /// citations present in the original text. Wikilinks match on `target`; web
+    /// links match on URL (case-insensitive). The section is omitted when nothing
+    /// is missing.
+    private func appendingMissingCitations(
+        to body: String,
+        sourceWikilinks: [Wikilink],
+        sourceWebLinks: [MarkdownLink]
+    ) -> String {
+        let bodyWikilinks = Set(parser.parseWikilinks(from: body).map { $0.target.lowercased() })
+        let bodyURLs = Set(parser.parseMarkdownLinks(from: body).map { $0.url.lowercased() })
+
+        let missingWikilinks = sourceWikilinks.filter { !bodyWikilinks.contains($0.target.lowercased()) }
+        let missingWebLinks = sourceWebLinks.filter { !bodyURLs.contains($0.url.lowercased()) }
+
+        guard !missingWikilinks.isEmpty || !missingWebLinks.isEmpty else {
+            return body
+        }
+
+        var lines: [String] = []
+        if !body.hasSuffix("\n\n") {
+            lines.append(body.hasSuffix("\n") ? "" : "\n")
+        }
+        lines.append("## Sources")
+        lines.append("")
+        for link in missingWebLinks {
+            lines.append("- [\(link.text)](\(link.url))")
+        }
+        for link in missingWikilinks {
+            let display = link.displayText ?? link.target
+            lines.append("- [[\(link.target)|\(display)]]")
+        }
+        return body + lines.joined(separator: "\n") + "\n"
     }
 
     /// Compiles a source document into a structured wiki article.
