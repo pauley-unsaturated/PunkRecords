@@ -34,6 +34,10 @@ struct DocumentRow: View {
                         Button("Move to Trash", role: .destructive, action: onRequestDelete)
                             .keyboardShortcut(.delete, modifiers: .command)
                     }
+                    // The same URL that .draggable hands to the receiver — exposed
+                    // for UI tests because XCUITest can't reliably synthesize a
+                    // drag from a SwiftUI List row that fires the drop handler.
+                    .accessibilityValue(fileURL.path)
             }
         }
         .tag(document.path)
