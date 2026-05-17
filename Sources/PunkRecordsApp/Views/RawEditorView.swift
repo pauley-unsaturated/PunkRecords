@@ -183,6 +183,12 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         textView.delegate = context.coordinator
         context.coordinator.applySyntaxHighlighting(to: textView)
 
+        // Make the NSTextView reachable from XCUITest. The wrapping
+        // SwiftUI .accessibilityIdentifier modifier lands on a parent
+        // view; we need the id on the TextView element itself so
+        // clicks and right-clicks target the text content.
+        textView.setAccessibilityIdentifier("editorTextView")
+
         return scrollView
     }
 

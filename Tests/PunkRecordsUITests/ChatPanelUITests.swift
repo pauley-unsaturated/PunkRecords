@@ -13,30 +13,34 @@ final class ChatPanelUITests: XCTestCase {
 
         // Wait for vault to load — the test doc should appear in the sidebar
         let testNote = app.staticTexts["Test Note"]
-        XCTAssertTrue(testNote.waitForExistence(timeout: 10), "Test vault should load with Test Note visible")
+        XCTAssertTrue(testNote.waitForExistence(timeout: 10),
+                      "Test vault should load with Test Note visible")
+
+        // Open the document so the editor (and the toolbar's AI Chat button) exists.
+        testNote.click()
+        XCTAssertTrue(app.buttons["AI Chat"].waitForExistence(timeout: 5),
+                      "AI Chat toolbar button should appear after a doc is open")
     }
 
     // MARK: - Chat Panel Toggle
 
     func testChatButtonTogglesChatPanel() throws {
-        // Click a document to open the editor (which has the AI Chat button)
-        selectFirstDocument()
-
         // Chat panel should not be visible initially
         let chatHeader = app.staticTexts["AI Chat"]
         XCTAssertFalse(chatHeader.exists, "Chat panel should be hidden initially")
 
         // Click the AI Chat toolbar button
         let chatButton = app.buttons["AI Chat"]
-        XCTAssertTrue(chatButton.waitForExistence(timeout: 5), "AI Chat button should exist in toolbar")
         chatButton.click()
 
         // Chat panel should now be visible
-        XCTAssertTrue(chatHeader.waitForExistence(timeout: 3), "Chat panel should appear after clicking button")
+        XCTAssertTrue(chatHeader.waitForExistence(timeout: 3),
+                      "Chat panel should appear after clicking button")
 
         // The input field should be present
-        let inputField = app.textFields["Ask about your knowledge base..."]
-        XCTAssertTrue(inputField.waitForExistence(timeout: 3), "Chat input field should be visible")
+        let inputField = app.textFields["Ask about your vault..."]
+        XCTAssertTrue(inputField.waitForExistence(timeout: 3),
+                      "Chat input field should be visible")
 
         // Click again to dismiss
         chatButton.click()
@@ -47,19 +51,17 @@ final class ChatPanelUITests: XCTestCase {
     }
 
     func testChatPanelCloseButton() throws {
-        selectFirstDocument()
-
         // Open chat panel
         let chatButton = app.buttons["AI Chat"]
-        XCTAssertTrue(chatButton.waitForExistence(timeout: 5))
         chatButton.click()
 
         let chatHeader = app.staticTexts["AI Chat"]
         XCTAssertTrue(chatHeader.waitForExistence(timeout: 3))
 
-        // Click the close button (xmark.circle.fill)
+        // Click the close button (xmark.circle.fill, accessibility label "Close")
         let closeButton = app.buttons["Close"]
-        XCTAssertTrue(closeButton.waitForExistence(timeout: 3), "Close button should exist in chat panel")
+        XCTAssertTrue(closeButton.waitForExistence(timeout: 3),
+                      "Close button should exist in chat panel")
         closeButton.click()
 
         // Panel should disappear
@@ -70,63 +72,25 @@ final class ChatPanelUITests: XCTestCase {
     // MARK: - Ask AI on Selection
 
     func testAskAIContextMenuPopulatesChat() throws {
-        selectFirstDocument()
+        // Target the NSTextView itself (not its NSScrollView) so that the
+        // click reaches the text content and ⌘A actually selects something.
+        let editor = app.textViews["editorTextView"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5),
+                      "Editor text view should appear after opening Test Note")
 
-        // Wait for the editor text view to load
-        let textView = app.scrollViews.firstMatch
-        guard textView.waitForExistence(timeout: 5) else {
-            XCTFail("Editor text view should appear")
-            return
-        }
-
-        // Select all text
-        textView.click()
+        editor.click()
         app.typeKey("a", modifierFlags: .command)
 
-        // Right-click to get context menu
-        textView.rightClick()
+        editor.rightClick()
 
-        // Look for our custom menu item
         let askAIItem = app.menuItems["Ask AI About Selection"]
-        guard askAIItem.waitForExistence(timeout: 3) else {
-            XCTFail("'Ask AI About Selection' menu item should appear when text is selected")
-            return
-        }
+        XCTAssertTrue(askAIItem.waitForExistence(timeout: 3),
+                      "'Ask AI About Selection' menu item should appear when text is selected")
         askAIItem.click()
 
-        // The chat panel should now be visible
         let chatHeader = app.staticTexts["AI Chat"]
         XCTAssertTrue(chatHeader.waitForExistence(timeout: 3),
                       "Chat panel should open after Ask AI")
-    }
-
-    // MARK: - Helpers
-
-    private func selectFirstDocument() {
-        // Try collection views first (modern SwiftUI List), then outlines
-        let collections = app.collectionViews
-        if collections.count > 0 {
-            let firstCell = collections.firstMatch.cells.firstMatch
-            if firstCell.waitForExistence(timeout: 5) {
-                firstCell.click()
-                return
-            }
-        }
-
-        let outlines = app.outlines
-        if outlines.count > 0 {
-            let firstRow = outlines.firstMatch.cells.firstMatch
-            if firstRow.waitForExistence(timeout: 5) {
-                firstRow.click()
-                return
-            }
-        }
-
-        // Last resort: try any clickable text that looks like a doc
-        let docLabel = app.staticTexts["Test Note"]
-        if docLabel.waitForExistence(timeout: 5) {
-            docLabel.click()
-        }
     }
 }
 
