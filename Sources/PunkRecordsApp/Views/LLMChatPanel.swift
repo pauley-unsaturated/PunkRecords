@@ -1,4 +1,5 @@
 import SwiftUI
+import MarkdownUI
 import PunkRecordsCore
 
 struct LLMChatPanel: View {
@@ -299,15 +300,23 @@ private struct ChatBubble: View {
 
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
-            Text(message.content)
-                .padding(10)
-                .background(
-                    message.role == .user
-                        ? Color.accentColor.opacity(0.15)
-                        : Color.secondary.opacity(0.1),
-                    in: .rect(cornerRadius: 10)
-                )
-                .textSelection(.enabled)
+            Group {
+                if message.role == .assistant {
+                    Markdown(message.content)
+                        .markdownTheme(.gitHub)
+                        .markdownTextStyle(\.text) { FontSize(.em(0.9)) }
+                } else {
+                    Text(message.content)
+                }
+            }
+            .padding(10)
+            .background(
+                message.role == .user
+                    ? Color.accentColor.opacity(0.15)
+                    : Color.secondary.opacity(0.1),
+                in: .rect(cornerRadius: 10)
+            )
+            .textSelection(.enabled)
 
             if message.role == .assistant && !message.content.isEmpty {
                 HStack(spacing: 8) {
