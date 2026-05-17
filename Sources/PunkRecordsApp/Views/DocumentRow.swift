@@ -23,6 +23,7 @@ struct DocumentRow: View {
                     .onSubmit(onCommitRename)
                     .onExitCommand(perform: onCancelRename)
                     .onAppear { renameFieldFocused = true }
+                    .accessibilityIdentifier("renameField")
             } else {
                 Label(document.title, systemImage: "doc.text")
                     .draggable(fileURL)

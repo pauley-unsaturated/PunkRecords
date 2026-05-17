@@ -21,6 +21,7 @@ struct MarkdownPreviewView: View {
                 .textSelection(.enabled)
         }
         .background(Color(nsColor: .textBackgroundColor))
+        .accessibilityIdentifier("markdownPreview")
     }
 }
 
