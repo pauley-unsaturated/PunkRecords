@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "PUNK",
+  "project_id": "24a573ac-c188-47c6-a5c3-8376d16897a3"
+}

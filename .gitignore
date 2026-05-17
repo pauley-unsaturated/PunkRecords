@@ -29,3 +29,8 @@ Package.resolved
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
