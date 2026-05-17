@@ -81,7 +81,8 @@ extension VaultWindow {
             .appendingPathComponent("PunkRecords-UITest")
         try? FileManager.default.removeItem(at: tempDir)
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let note = """
+
+        let testNote = """
         ---
         id: AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE
         title: Test Note
@@ -94,8 +95,25 @@ extension VaultWindow {
 
         Select this text to test Ask AI.
         """
-        try? note.write(to: tempDir.appendingPathComponent("test-note.md"),
-                       atomically: true, encoding: .utf8)
+        try? testNote.write(to: tempDir.appendingPathComponent("test-note.md"),
+                            atomically: true, encoding: .utf8)
+
+        // Second note so destructive-flow tests can delete one without
+        // leaving the vault empty (which would change other tests' setUp).
+        let scratch = """
+        ---
+        id: BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF
+        title: Scratch Note
+        tags: [testing]
+        ---
+
+        # Scratch Note
+
+        Disposable note for delete-flow UI tests.
+        """
+        try? scratch.write(to: tempDir.appendingPathComponent("scratch-note.md"),
+                           atomically: true, encoding: .utf8)
+
         return tempDir
     }
 }
