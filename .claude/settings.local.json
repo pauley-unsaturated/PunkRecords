@@ -19,7 +19,8 @@
       "mcp__xcode__RunSomeTests",
       "mcp__xcode__RenderPreview",
       "Bash(swift test:*)",
-      "Bash(xcodebuild test:*)"
+      "Bash(xcodebuild test:*)",
+      "Bash(npx skills *)"
     ]
   }
 }
