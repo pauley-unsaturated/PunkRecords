@@ -7,21 +7,26 @@ struct RawEditorView: View {
     let documentPath: RelativePath
     @Environment(AppState.self) private var appState
     @State private var viewModel: DocumentEditorViewModel?
+    @State private var isPreviewing = false
 
     var body: some View {
         Group {
             if let viewModel {
-                EditorTextViewRepresentable(
-                    viewModel: viewModel,
-                    onAskAI: { selectedText in
-                        appState.askAIText = selectedText
-                        appState.isChatPanelVisible = true
-                    },
-                    onSelectionChanged: { selectedText in
-                        appState.selectedText = selectedText
-                    }
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if isPreviewing {
+                    MarkdownPreviewView(content: viewModel.document.content)
+                } else {
+                    EditorTextViewRepresentable(
+                        viewModel: viewModel,
+                        onAskAI: { selectedText in
+                            appState.askAIText = selectedText
+                            appState.isChatPanelVisible = true
+                        },
+                        onSelectionChanged: { selectedText in
+                            appState.selectedText = selectedText
+                        }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             } else {
                 ProgressView("Loading...")
             }
@@ -30,6 +35,15 @@ struct RawEditorView: View {
         .navigationSubtitle(viewModel?.isDirty == true ? "Edited" : "")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                Button(
+                    isPreviewing ? "Edit" : "Preview",
+                    systemImage: isPreviewing ? "pencil" : "eye"
+                ) {
+                    isPreviewing.toggle()
+                }
+                .help(isPreviewing ? "Switch back to the markdown source" : "Render the document with GitHub-flavored markdown")
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+
                 Button("Compile to Wiki", systemImage: "doc.text.magnifyingglass") {
                     Task { await compileCurrentDocument() }
                 }

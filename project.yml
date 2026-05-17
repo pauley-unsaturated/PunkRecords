@@ -18,6 +18,11 @@ localPackages:
   - Packages/PunkRecordsTestSupport
   - Packages/PunkRecordsEvals
 
+packages:
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: "2.4.0"
+
 targets:
   PunkRecordsApp:
     type: application
@@ -32,6 +37,8 @@ targets:
     dependencies:
       - package: PunkRecordsCore
       - package: PunkRecordsInfra
+      - package: MarkdownUI
+        product: MarkdownUI
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.markpauley.PunkRecords

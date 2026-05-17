@@ -37,12 +37,18 @@ struct LLMChatPanel: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(messages) { message in
-                            ChatBubble(
-                                message: message,
-                                onSaveAsNote: { Task { await saveAsNote(message.content) } },
-                                onReportIssueCopy: { Task { await reportIssueCopy(message) } },
-                                onReportIssueSave: { Task { await reportIssueSave(message) } }
-                            )
+                            Group {
+                                if message.role == .tool, let call = message.toolCall {
+                                    ToolCallBubble(toolCall: call)
+                                } else {
+                                    ChatBubble(
+                                        message: message,
+                                        onSaveAsNote: { Task { await saveAsNote(message.content) } },
+                                        onReportIssueCopy: { Task { await reportIssueCopy(message) } },
+                                        onReportIssueSave: { Task { await reportIssueSave(message) } }
+                                    )
+                                }
+                            }
                             .id(message.id)
                         }
                     }
@@ -134,15 +140,13 @@ struct LLMChatPanel: View {
         )
 
         isStreaming = true
-        var assistantMessage = ChatMessage(role: .assistant, content: "", context: context)
-        messages.append(assistantMessage)
-
         if isAgentMode {
-            await sendAgentMessage(text, orchestrator: orchestrator, assistantMessage: &assistantMessage)
+            await sendAgentMessage(text, orchestrator: orchestrator, context: context)
         } else {
+            var assistantMessage = ChatMessage(role: .assistant, content: "", context: context)
+            messages.append(assistantMessage)
             await sendSimpleMessage(text, orchestrator: orchestrator, assistantMessage: &assistantMessage)
         }
-
         isStreaming = false
     }
 
@@ -176,13 +180,10 @@ struct LLMChatPanel: View {
         }
     }
 
-    private func sendAgentMessage(_ text: String, orchestrator: LLMOrchestrator, assistantMessage: inout ChatMessage) async {
+    private func sendAgentMessage(_ text: String, orchestrator: LLMOrchestrator, context: MessageContext) async {
         guard let repository = appState.repository,
               let searchIndex = appState.searchIndex else {
-            assistantMessage.content = "Vault not loaded."
-            if let lastIndex = messages.indices.last {
-                messages[lastIndex] = assistantMessage
-            }
+            messages.append(ChatMessage(role: .assistant, content: "Vault not loaded.", context: context))
             return
         }
 
@@ -210,41 +211,42 @@ struct LLMChatPanel: View {
                 selectedText: appState.selectedText
             )
 
+            // Index of the current assistant text bubble being appended to. nil after a tool
+            // call, which forces the next textToken to start a fresh bubble — so tool calls
+            // visually break up the assistant's narration.
+            var currentAssistantIndex: Int? = nil
+
             for try await event in stream {
                 switch event {
                 case .textToken(let token):
-                    assistantMessage.content += token
-                    if let lastIndex = messages.indices.last {
-                        messages[lastIndex] = assistantMessage
-                    }
-                case .toolStart(let name, _):
-                    assistantMessage.content += "\n\n> Using tool: **\(name)**...\n"
-                    if let lastIndex = messages.indices.last {
-                        messages[lastIndex] = assistantMessage
-                    }
-                case .toolEnd(let name, let result):
-                    if result.isError {
-                        assistantMessage.content += "> **\(name)** failed: \(result.content)\n\n"
+                    if let idx = currentAssistantIndex {
+                        messages[idx].content += token
                     } else {
-                        assistantMessage.content += "> **\(name)** completed.\n\n"
+                        messages.append(ChatMessage(role: .assistant, content: token, context: context))
+                        currentAssistantIndex = messages.count - 1
                     }
-                    if let lastIndex = messages.indices.last {
-                        messages[lastIndex] = assistantMessage
+                case .toolStart(let name, let args):
+                    let info = ToolCallInfo(name: name, arguments: args)
+                    messages.append(ChatMessage(role: .tool, content: "", toolCall: info))
+                    currentAssistantIndex = nil
+                case .toolEnd(let name, let result):
+                    if let idx = messages.lastIndex(where: {
+                        $0.role == .tool && $0.toolCall?.name == name && $0.toolCall?.isInFlight == true
+                    }), var info = messages[idx].toolCall {
+                        info.output = result.content
+                        info.isError = result.isError
+                        info.isInFlight = false
+                        messages[idx].toolCall = info
                     }
                 case .error(let err):
-                    assistantMessage.content += "\n\n*Agent error: \(err)*"
-                    if let lastIndex = messages.indices.last {
-                        messages[lastIndex] = assistantMessage
-                    }
+                    messages.append(ChatMessage(role: .assistant, content: "*Agent error: \(err)*", context: context))
+                    currentAssistantIndex = nil
                 case .done, .agentStart, .turnStart, .turnEnd:
                     break
                 }
             }
         } catch {
-            assistantMessage.content += "\n\n*Error: \(error.localizedDescription)*"
-            if let lastIndex = messages.indices.last {
-                messages[lastIndex] = assistantMessage
-            }
+            messages.append(ChatMessage(role: .assistant, content: "*Error: \(error.localizedDescription)*", context: context))
         }
     }
 
@@ -317,9 +319,11 @@ struct ChatMessage: Identifiable {
     /// For assistant messages: snapshot of what the user did when submitting the
     /// triggering prompt. Used by the "Report Issue" flow to reconstruct context.
     var context: MessageContext? = nil
+    /// Populated when role == .tool — the agent tool invocation this row represents.
+    var toolCall: ToolCallInfo? = nil
 
     enum Role {
-        case user, assistant
+        case user, assistant, tool
     }
 }
 
