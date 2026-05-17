@@ -20,6 +20,15 @@ struct LiveAgentEvals {
         }
     }
 
+    static func requireOpenAIKey() throws {
+        // `try?` already flattens String? down a level, so this resolves to
+        // String? — nil means either the keychain throws or has no entry.
+        let key = (try? keychain.apiKey(for: "openai")) ?? nil
+        guard let key, !key.isEmpty else {
+            throw SkipError("No OpenAI API key in keychain — skipping live eval")
+        }
+    }
+
     static func resultsDirectory() throws -> URL {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let dir = home.appendingPathComponent(".punkrecords/eval-results", isDirectory: true)
@@ -368,6 +377,57 @@ struct LiveAgentEvals {
 
         print("[WEB-SEARCH] web_search invocations: \(webSearchCalls)")
         #expect(webSearchCalls >= 1, "Expected the agent to call web_search for a 'use web search to confirm' prompt")
+    }
+
+    /// Counterpart to `liveWebSearchTriggers` for OpenAI: verifies the Responses
+    /// API path emits the same `web_search` server-tool events the Anthropic
+    /// path does, so the chat UI's tool bubble works regardless of provider.
+    /// Skips without an OpenAI key in the keychain — billable.
+    @Test("Live (OpenAI): research prompt triggers web_search via Responses API")
+    func liveOpenAIWebSearchTriggers() async throws {
+        try Self.requireOpenAIKey()
+
+        let factory = TempVaultFactory()
+        let (vault, cleanup) = try factory.createTempVault()
+        defer { cleanup() }
+
+        let repo = FileSystemDocumentRepository(vaultRoot: vault.rootURL)
+        let index = try SQLiteSearchIndex(vaultRoot: vault.rootURL)
+        let contextBuilder = ContextBuilder(searchService: index, repository: repo)
+        let provider = OpenAIProvider(keychainService: Self.keychain)
+
+        let agent = AgentLoop(
+            provider: provider,
+            contextBuilder: contextBuilder,
+            tools: [],
+            vaultName: "Test"
+        )
+
+        var webSearchCalls = 0
+        var sawCompletion = false
+        let stream = await agent.run(
+            prompt: "What's the latest stable Swift release? Use web search to confirm.",
+            scope: .global,
+            currentDocumentID: nil,
+            selectedText: nil,
+            enableWebSearch: true
+        )
+        for try await event in stream {
+            switch event {
+            case .toolStart(let name, _) where name == "web_search":
+                webSearchCalls += 1
+            case .toolEnd(let name, _) where name == "web_search":
+                sawCompletion = true
+            default:
+                break
+            }
+        }
+
+        print("[OPENAI-WEB-SEARCH] web_search invocations: \(webSearchCalls), completion event: \(sawCompletion)")
+        #expect(webSearchCalls >= 1,
+                "Expected the OpenAI agent to call web_search for a 'use web search to confirm' prompt")
+        #expect(sawCompletion,
+                "Expected the synthesized serverToolResult to fire toolEnd so the UI bubble completes")
     }
 
     @Test("Live: aggregate report across all scenarios")
