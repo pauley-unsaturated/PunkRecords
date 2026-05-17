@@ -171,4 +171,120 @@ struct FileSystemDocumentRepositoryTests {
         let all = try await repo.allDocuments()
         #expect(all.isEmpty)
     }
+
+    // MARK: - Duplicate ID Healing
+
+    /// Helper: write a file with a fixed UUID in its frontmatter so we can construct
+    /// a deliberate collision on disk.
+    private func writeFile(
+        sharedID: UUID,
+        title: String,
+        path: String,
+        in vaultRoot: URL
+    ) throws {
+        let content = """
+            ---
+            id: \(sharedID.uuidString)
+            ---
+
+            # \(title)
+            """
+        let url = vaultRoot.appendingPathComponent(path)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try content.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    @Test("healDuplicateIDs rewrites the duplicate, keeps the alphabetically-first path")
+    func healingPicksStableWinner() async throws {
+        let (vault, cleanup) = try factory.createTempVault()
+        defer { cleanup() }
+        let repo = FileSystemDocumentRepository(vaultRoot: vault.rootURL)
+
+        let shared = UUID()
+        try writeFile(sharedID: shared, title: "AKB", path: "AgentKontrol-KB.md", in: vault.rootURL)
+        try writeFile(sharedID: shared, title: "Untitled", path: "Untitled.md", in: vault.rootURL)
+
+        let healed = try await repo.healDuplicateIDs()
+
+        #expect(healed.count == 1)
+        // Sorted lexicographically, "AgentKontrol-KB.md" < "Untitled.md", so the
+        // Untitled file is the victim.
+        #expect(healed.first?.path == "Untitled.md")
+        #expect(healed.first?.oldID == shared)
+        #expect(healed.first?.newID != shared)
+
+        // The kept file still has the original id.
+        let kept = try await repo.document(atPath: "AgentKontrol-KB.md")
+        #expect(kept?.id == shared)
+
+        // The healed file now has a fresh id.
+        let rewritten = try await repo.document(atPath: "Untitled.md")
+        #expect(rewritten?.id != shared)
+        #expect(rewritten?.id == healed.first?.newID)
+    }
+
+    @Test("healDuplicateIDs is a no-op on a clean vault")
+    func healingNoOpOnCleanVault() async throws {
+        let (vault, cleanup) = try factory.createTempVault()
+        defer { cleanup() }
+        let repo = FileSystemDocumentRepository(vaultRoot: vault.rootURL)
+
+        try writeFile(sharedID: UUID(), title: "A", path: "a.md", in: vault.rootURL)
+        try writeFile(sharedID: UUID(), title: "B", path: "b.md", in: vault.rootURL)
+
+        let healed = try await repo.healDuplicateIDs()
+        #expect(healed.isEmpty)
+    }
+
+    @Test("healDuplicateIDs handles three-way collision")
+    func healingThreeWayCollision() async throws {
+        let (vault, cleanup) = try factory.createTempVault()
+        defer { cleanup() }
+        let repo = FileSystemDocumentRepository(vaultRoot: vault.rootURL)
+
+        let shared = UUID()
+        try writeFile(sharedID: shared, title: "A", path: "a.md", in: vault.rootURL)
+        try writeFile(sharedID: shared, title: "B", path: "b.md", in: vault.rootURL)
+        try writeFile(sharedID: shared, title: "C", path: "c.md", in: vault.rootURL)
+
+        let healed = try await repo.healDuplicateIDs()
+        #expect(healed.count == 2)
+        #expect(healed.map(\.path).sorted() == ["b.md", "c.md"])
+
+        // After healing, all three should have distinct ids.
+        let all = try await repo.allDocuments()
+        let ids = Set(all.map(\.id))
+        #expect(ids.count == 3)
+    }
+
+    @Test("rewriteFrontmatterID leaves body intact when the UUID appears in body text")
+    func rewriteOnlyTouchesFrontmatter() {
+        let id = UUID()
+        let other = UUID()
+        let content = """
+            ---
+            id: \(id.uuidString)
+            ---
+
+            # Note
+
+            Earlier referenced \(id.uuidString) in the prose.
+            """
+
+        let rewritten = FileSystemDocumentRepository.rewriteFrontmatterID(
+            in: content,
+            oldID: id,
+            newID: other
+        )
+
+        #expect(rewritten != nil)
+        // The body mention should not be substituted.
+        let bodyOccurrences = (rewritten ?? "").components(separatedBy: id.uuidString).count - 1
+        #expect(bodyOccurrences == 1, "Body mention of the old UUID must be preserved")
+        let newOccurrences = (rewritten ?? "").components(separatedBy: other.uuidString).count - 1
+        #expect(newOccurrences == 1, "New UUID should appear exactly once (in frontmatter)")
+    }
 }

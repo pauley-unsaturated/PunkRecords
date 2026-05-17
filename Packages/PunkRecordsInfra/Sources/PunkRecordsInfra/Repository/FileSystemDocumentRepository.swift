@@ -75,6 +75,84 @@ public actor FileSystemDocumentRepository: DocumentRepository {
         try FileManager.default.moveItem(at: oldURL, to: newURL)
     }
 
+    // MARK: - Duplicate ID Healing
+
+    /// Records one document whose ID collided with another in the vault and was rewritten.
+    public struct HealedDuplicate: Sendable, Equatable {
+        public let path: RelativePath
+        public let oldID: DocumentID
+        public let newID: DocumentID
+    }
+
+    /// Find documents sharing a frontmatter `id:` and rewrite the duplicates with fresh
+    /// UUIDs. The first hit (lexicographically smallest path) keeps the original ID so
+    /// the choice is stable across runs. The replacement is scoped to the frontmatter
+    /// block to avoid clobbering any body text that happens to match the old UUID.
+    /// Returns the list of healed files; an empty array means the vault was clean.
+    public func healDuplicateIDs() async throws -> [HealedDuplicate] {
+        let docs = try await allDocuments()
+        var groups: [DocumentID: [Document]] = [:]
+        for doc in docs { groups[doc.id, default: []].append(doc) }
+
+        var healed: [HealedDuplicate] = []
+        for (id, dupes) in groups where dupes.count > 1 {
+            let sorted = dupes.sorted { $0.path < $1.path }
+            for victim in sorted.dropFirst() {
+                let newID = DocumentID()
+                let fileURL = vaultRoot.appendingPathComponent(victim.path)
+                let content = try String(contentsOf: fileURL, encoding: .utf8)
+                guard let rewritten = Self.rewriteFrontmatterID(
+                    in: content,
+                    oldID: id,
+                    newID: newID
+                ) else {
+                    continue
+                }
+                try rewritten.write(to: fileURL, atomically: true, encoding: .utf8)
+                healed.append(HealedDuplicate(path: victim.path, oldID: id, newID: newID))
+            }
+        }
+        return healed
+    }
+
+    /// Replace the `id:` line inside the frontmatter block only. Returns nil if no
+    /// frontmatter block is present or the old ID can't be found in it.
+    public static func rewriteFrontmatterID(
+        in content: String,
+        oldID: DocumentID,
+        newID: DocumentID
+    ) -> String? {
+        let lines = content.components(separatedBy: "\n")
+        guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else { return nil }
+
+        var closingIndex: Int?
+        for i in 1..<lines.count {
+            if lines[i].trimmingCharacters(in: .whitespaces) == "---" {
+                closingIndex = i
+                break
+            }
+        }
+        guard let endIndex = closingIndex else { return nil }
+
+        var rewrote = false
+        var newLines = lines
+        for i in 1..<endIndex {
+            let line = newLines[i]
+            guard let colonIndex = line.firstIndex(of: ":") else { continue }
+            let key = String(line[line.startIndex..<colonIndex]).trimmingCharacters(in: .whitespaces)
+            guard key == "id" else { continue }
+            let value = String(line[line.index(after: colonIndex)...]).trimmingCharacters(in: .whitespaces)
+            guard UUID(uuidString: value) == oldID else { continue }
+            // Preserve any indentation before "id:" (rare, but possible)
+            let prefix = line.prefix { $0 == " " || $0 == "\t" }
+            newLines[i] = "\(prefix)id: \(newID.uuidString)"
+            rewrote = true
+            break
+        }
+        guard rewrote else { return nil }
+        return newLines.joined(separator: "\n")
+    }
+
     // MARK: - File Watching
 
     public func startWatching() {

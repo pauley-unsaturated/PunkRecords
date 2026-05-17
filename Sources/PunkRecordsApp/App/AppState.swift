@@ -74,6 +74,16 @@ final class AppState {
             self.orchestrator = orch
             self.noteCompiler = NoteCompiler(orchestrator: orch, repository: repo)
 
+            // Heal any duplicate frontmatter IDs before indexing — duplicates
+            // would otherwise confuse repo.document(withID:) and the backlink map.
+            let healed = try await repo.healDuplicateIDs()
+            if !healed.isEmpty {
+                let summary = healed.map { "\($0.path): \($0.oldID) → \($0.newID)" }
+                    .joined(separator: "; ")
+                errorMessage = "Healed \(healed.count) duplicate document ID(s) on open."
+                print("[VaultOpen] healed duplicate IDs: \(summary)")
+            }
+
             let docs = try await repo.allDocuments()
             self.documents = docs
             try await index.rebuildIndex(documents: docs)
