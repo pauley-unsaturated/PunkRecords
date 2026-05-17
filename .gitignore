@@ -34,3 +34,18 @@ Package.resolved
 .dolt/
 *.db
 .beads-credential-key
+
+# Secrets (belt-and-suspenders — nothing currently writes these,
+# but cheap insurance against accidental commits)
+.env
+.env.*
+*.pem
+*.p12
+*.pfx
+*.key
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+*.mobileprovision
+credentials.json

@@ -22,3 +22,17 @@ if command -v bd >/dev/null 2>&1; then
   if [ $_bd_exit -ne 0 ]; then exit $_bd_exit; fi
 fi
 # --- END BEADS INTEGRATION v1.0.4 ---
+
+# Secret scan on staged changes. Install: `brew install gitleaks`.
+# Bypass for emergencies: SKIP_GITLEAKS=1 git commit ...
+if [ "${SKIP_GITLEAKS:-0}" != "1" ]; then
+  if command -v gitleaks >/dev/null 2>&1; then
+    gitleaks git --staged --redact --no-banner --exit-code 1 || {
+      echo >&2 "gitleaks: staged changes appear to contain a secret (see above)."
+      echo >&2 "If this is a false positive, add a gitleaks:allow comment or use SKIP_GITLEAKS=1."
+      exit 1
+    }
+  else
+    echo >&2 "gitleaks not installed — skipping secret scan. \`brew install gitleaks\` to enable."
+  fi
+fi
