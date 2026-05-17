@@ -7,9 +7,6 @@ import PunkRecordsInfra
 @Observable
 final class AppState {
     var currentVault: Vault?
-    /// Stable selection key. Path is unique on disk; document ids may collide
-    /// when vaults have duplicate frontmatter.
-    var selectedDocumentPath: RelativePath?
     var isSearchPresented = false
     var isChatPanelVisible = false
     var isBacklinksPanelVisible = true
@@ -18,14 +15,25 @@ final class AppState {
     var askAIText: String?
     var selectedText: String?
 
+    /// Documents + selection live here. Operations on this state are Core-defined
+    /// and exercised by tests directly — AppState just owns the snapshot.
+    var session = VaultDocumentsState()
+
     /// Authoritative document list for the open vault. Mirrors the disk via the FS watcher.
-    var documents: [Document] = []
+    var documents: [Document] {
+        get { session.documents }
+        set { session.documents = newValue }
+    }
+
+    /// Stable selection key. Path is unique on disk; document ids may collide
+    /// when vaults have duplicate frontmatter.
+    var selectedDocumentPath: RelativePath? {
+        get { session.selectedPath }
+        set { session.selectedPath = newValue }
+    }
 
     /// The currently selected document, resolved from `selectedDocumentPath`.
-    var selectedDocument: Document? {
-        guard let path = selectedDocumentPath else { return nil }
-        return documents.first { $0.path == path }
-    }
+    var selectedDocument: Document? { session.selectedDocument }
 
     // Dependencies — initialized lazily when a vault is opened
     private(set) var repository: FileSystemDocumentRepository?
@@ -125,11 +133,11 @@ final class AppState {
                 errorMessage = "Failed to create note: \(error.localizedDescription)"
                 return
             }
-            upsert(doc)
+            session.upsert(doc)
             if let index = searchIndex {
                 try? await index.index(document: doc)
             }
-            selectedDocumentPath = path
+            session.selectedPath = path
         }
     }
 
@@ -174,13 +182,7 @@ final class AppState {
             return
         }
 
-        if !isSamePath {
-            documents.removeAll { $0.path == doc.path }
-            if selectedDocumentPath == doc.path {
-                selectedDocumentPath = newPath
-            }
-        }
-        upsert(updatedDoc)
+        session.applyRename(from: doc.path, to: updatedDoc)
 
         if let index = searchIndex {
             try? await index.index(document: updatedDoc)
@@ -195,10 +197,7 @@ final class AppState {
             errorMessage = "Failed to delete: \(error.localizedDescription)"
             return
         }
-        documents.removeAll { $0.path == doc.path }
-        if selectedDocumentPath == doc.path {
-            selectedDocumentPath = nil
-        }
+        session.remove(path: doc.path)
         if let index = searchIndex {
             try? await index.removeFromIndex(documentID: doc.id)
         }
@@ -218,24 +217,7 @@ final class AppState {
     }
 
     private func applyChange(_ change: VaultChange) {
-        switch change {
-        case .added(let doc), .modified(let doc):
-            upsert(doc)
-        case .deleted(_, let path):
-            documents.removeAll { $0.path == path }
-        }
-    }
-
-    /// Upsert by **path first** (path is unique on disk) then by id (which can collide
-    /// in vaults with duplicate frontmatter ids).
-    private func upsert(_ doc: Document) {
-        if let idx = documents.firstIndex(where: { $0.path == doc.path }) {
-            documents[idx] = doc
-        } else if let idx = documents.firstIndex(where: { $0.id == doc.id }) {
-            documents[idx] = doc
-        } else {
-            documents.append(doc)
-        }
+        session.apply(change)
     }
 
     // MARK: - Helpers
