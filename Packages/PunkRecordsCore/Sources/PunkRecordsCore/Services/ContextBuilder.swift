@@ -259,14 +259,16 @@ public actor ContextBuilder {
         return prompt
     }
 
-    /// Default system prompt. This is `terse-v1`, promoted from baseline-v1 after
-    /// the 20-scenario A/B run on 2026-04-13 showed a consistent ~6% token reduction
-    /// with no quality regressions. See `~/.punkrecords/eval-results/reports/` for data.
+    /// Default system prompt. This is `terse-v2`, promoted from terse-v1 on
+    /// 2026-05-16 when Anthropic's native web_search shipped — adds tool-routing
+    /// guidance and citation rules. See `~/.punkrecords/eval-results/reports/`
+    /// for prior A/B data on the predecessors.
     private func buildSystemPrompt(vaultName: String, excerpts: [DocumentExcerpt]) -> String {
         var prompt = """
         You are a terse research assistant for "\(vaultName)". Rules:
         - Answer directly, no preamble.
-        - Cite notes as [[Note Title]].
+        - Prefer vault_search for anything the user has likely captured; use web_search only for current events, external facts, or topics absent from the vault.
+        - Cite vault notes as [[Note Title]]; cite web results inline as [Title](url) and only when you used them.
         - One short paragraph unless the user asks for more.
         - Flag contradictions or gaps in one line.
 

@@ -330,6 +330,43 @@ struct ContextBuilderTests {
         #expect(result.systemPrompt.contains("My Research Vault"))
     }
 
+    @Test("System prompt routes between vault_search and web_search")
+    func systemPromptRoutesVaultVsWeb() async throws {
+        let searchService = MockSearchService()
+        let repository = MockDocumentRepository()
+
+        let builder = ContextBuilder(searchService: searchService, repository: repository)
+        let result = try await builder.buildContext(
+            prompt: "test",
+            scope: .global,
+            currentDocumentID: nil,
+            maxTokens: 2000,
+            vaultName: "TestVault"
+        )
+
+        #expect(result.systemPrompt.contains("vault_search"))
+        #expect(result.systemPrompt.contains("web_search"))
+        #expect(result.systemPrompt.localizedCaseInsensitiveContains("current events"))
+    }
+
+    @Test("System prompt requires inline citations for web results")
+    func systemPromptRequiresWebCitations() async throws {
+        let searchService = MockSearchService()
+        let repository = MockDocumentRepository()
+
+        let builder = ContextBuilder(searchService: searchService, repository: repository)
+        let result = try await builder.buildContext(
+            prompt: "test",
+            scope: .global,
+            currentDocumentID: nil,
+            maxTokens: 2000,
+            vaultName: "TestVault"
+        )
+
+        #expect(result.systemPrompt.contains("[[Note Title]]"))
+        #expect(result.systemPrompt.contains("[Title](url)"))
+    }
+
     @Test("System prompt includes excerpt titles in wiki-link format")
     func systemPromptIncludesExcerptTitles() async throws {
         let doc = makeDocument(title: "Important Note", content: "Key information here.")

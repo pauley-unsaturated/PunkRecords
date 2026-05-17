@@ -267,6 +267,68 @@ struct LiveAgentEvals {
 
     // MARK: - Combined Report
 
+    /// Live check that the routing guidance in terse-v2 actually works:
+    /// when the vault clearly contains the answer, the agent should pick
+    /// vault_search rather than reaching for the web — even with web_search
+    /// enabled.
+    @Test("Live: vault-answerable prompt prefers vault_search over web_search")
+    func liveVaultRoutingPrefersVault() async throws {
+        try Self.requireAPIKey()
+
+        let factory = TempVaultFactory()
+        let (vault, cleanup) = try factory.createTempVault()
+        defer { cleanup() }
+
+        try factory.writeTestDocument("""
+            ---
+            id: \(UUID().uuidString)
+            ---
+            # Project Glimmer
+
+            Project Glimmer is the user's internal codename for a real-time
+            collaboration prototype. Status: paused since Q3 2025 pending UX review.
+            Owner: Mira Holt.
+            """,
+            filename: "ProjectGlimmer.md",
+            in: vault.rootURL
+        )
+
+        let repo = FileSystemDocumentRepository(vaultRoot: vault.rootURL)
+        let index = try SQLiteSearchIndex(vaultRoot: vault.rootURL)
+        let documents = try await repo.allDocuments()
+        try await index.rebuildIndex(documents: documents)
+
+        let contextBuilder = ContextBuilder(searchService: index, repository: repo)
+        let provider = AnthropicProvider(keychainService: Self.keychain)
+
+        let agent = AgentLoop(
+            provider: provider,
+            contextBuilder: contextBuilder,
+            tools: [VaultSearchTool(searchService: index), ReadDocumentTool(repository: repo)],
+            vaultName: vault.name
+        )
+
+        var vaultSearchCalls = 0
+        var webSearchCalls = 0
+        let stream = await agent.run(
+            prompt: "What's the status of Project Glimmer in my notes?",
+            scope: .global,
+            currentDocumentID: nil,
+            selectedText: nil,
+            enableWebSearch: true
+        )
+        for try await event in stream {
+            if case let .toolStart(name, _) = event {
+                if name == "vault_search" { vaultSearchCalls += 1 }
+                if name == "web_search" { webSearchCalls += 1 }
+            }
+        }
+
+        print("[VAULT-ROUTING] vault_search=\(vaultSearchCalls) web_search=\(webSearchCalls)")
+        #expect(vaultSearchCalls >= 1, "Agent should search the vault for a vault-specific question")
+        #expect(webSearchCalls == 0, "Agent should not fall back to web_search when the vault answers it")
+    }
+
     /// Live exercise of the Anthropic native web_search server tool. The exact answer
     /// is intentionally not asserted (it's the live web) — we just verify the agent
     /// elects to call web_search for a research-flavoured prompt the vault can't answer.

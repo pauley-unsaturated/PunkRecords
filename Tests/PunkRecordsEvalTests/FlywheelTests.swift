@@ -54,6 +54,29 @@ struct FlywheelTests {
         #expect(baseline.template.contains("{vault_name}"))
     }
 
+    @Test("Current default variant is terse-v2 with vault/web routing")
+    func currentVariantIsTerseV2() {
+        let current = PromptVariant.current
+        #expect(current.id == "terse-v2")
+        #expect(current.version == 2)
+        #expect(current.parentVariantID == "terse-v1")
+        // Routing guidance must be present so the agent picks the right tool.
+        #expect(current.template.contains("vault_search"))
+        #expect(current.template.contains("web_search"))
+        // Citation discipline for both vault and web sources.
+        #expect(current.template.contains("[[Note Title]]"))
+        #expect(current.template.contains("[Title](url)"))
+    }
+
+    @Test("terse-v1 stays archived under its own constant")
+    func terseV1Archived() {
+        let v1 = PromptVariant.terseV1
+        #expect(v1.id == "terse-v1")
+        #expect(v1.parentVariantID == "baseline-v1")
+        // v1 predates web search, so it should NOT mention web routing.
+        #expect(!v1.template.contains("web_search"))
+    }
+
     @Test("PromptVariant round-trips through JSON")
     func variantJSONRoundTrip() throws {
         let original = PromptVariant(

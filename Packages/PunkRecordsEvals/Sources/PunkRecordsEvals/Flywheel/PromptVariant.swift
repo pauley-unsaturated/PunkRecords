@@ -49,10 +49,10 @@ public struct PromptVariant: Codable, Identifiable, Sendable {
         createdAt: Date(timeIntervalSince1970: 1744416000)
     )
 
-    /// The current default prompt in ContextBuilder. Promoted from terse-v1 after
-    /// a 20-scenario A/B run on 2026-04-13 showed consistent ~6% token reduction
-    /// at 100% task completion parity with baseline-v1.
-    public static let current = PromptVariant(
+    /// Promoted from baseline-v1 after a 20-scenario A/B run on 2026-04-13
+    /// showed consistent ~6% token reduction at 100% task completion parity.
+    /// Superseded by terse-v2 on 2026-05-16 once web_search shipped.
+    public static let terseV1 = PromptVariant(
         id: "terse-v1",
         name: "Terse",
         version: 1,
@@ -66,5 +66,25 @@ public struct PromptVariant: Codable, Identifiable, Sendable {
         """,
         parentVariantID: "baseline-v1",
         createdAt: Date(timeIntervalSince1970: 1744502400)
+    )
+
+    /// The current default prompt in ContextBuilder. Adds vault-vs-web tool
+    /// routing and citation discipline once Anthropic's native web_search
+    /// became available. Promoted from terse-v1 on 2026-05-16.
+    public static let current = PromptVariant(
+        id: "terse-v2",
+        name: "Terse + tool routing",
+        version: 2,
+        description: "Adds vault-vs-web search routing and web citation rules",
+        template: """
+        You are a terse research assistant for "{vault_name}". Rules:
+        - Answer directly, no preamble.
+        - Prefer vault_search for anything the user has likely captured; use web_search only for current events, external facts, or topics absent from the vault.
+        - Cite vault notes as [[Note Title]]; cite web results inline as [Title](url) and only when you used them.
+        - One short paragraph unless the user asks for more.
+        - Flag contradictions or gaps in one line.
+        """,
+        parentVariantID: "terse-v1",
+        createdAt: Date(timeIntervalSince1970: 1747353600) // 2026-05-16T00:00:00Z
     )
 }
