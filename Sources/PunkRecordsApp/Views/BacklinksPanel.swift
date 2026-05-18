@@ -6,11 +6,29 @@ struct BacklinksPanel: View {
     @Environment(AppState.self) private var appState
     @State private var backlinks: [Document] = []
 
+    /// Combines the displayed doc with AppState's change tick so the panel
+    /// re-queries whenever *any* document mutates — picking up new links
+    /// to this doc, removed links, and deletions of linking docs without
+    /// requiring the user to navigate away and back.
+    private struct RefreshKey: Hashable {
+        let documentID: DocumentID
+        let tick: Int
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("Backlinks", systemImage: "link")
-                .font(.headline)
-                .padding(.horizontal)
+            HStack {
+                Label("Backlinks", systemImage: "link")
+                    .font(.headline)
+                Spacer()
+                if !backlinks.isEmpty {
+                    Text("\(backlinks.count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("backlinksCount")
+                }
+            }
+            .padding(.horizontal)
 
             if backlinks.isEmpty {
                 Text("No notes link to this document")
@@ -29,7 +47,7 @@ struct BacklinksPanel: View {
                 .listStyle(.plain)
             }
         }
-        .task(id: documentID) {
+        .task(id: RefreshKey(documentID: documentID, tick: appState.vaultChangeTick)) {
             await loadBacklinks()
         }
     }

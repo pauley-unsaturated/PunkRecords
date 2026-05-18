@@ -218,7 +218,16 @@ final class AppState {
 
     private func applyChange(_ change: VaultChange) {
         session.apply(change)
+        // Tick to wake reactive consumers (e.g. BacklinksPanel) whose data
+        // depends on cross-document state the session doesn't track.
+        vaultChangeTick &+= 1
     }
+
+    /// Increments on every observed VaultChange. Views that need to refresh
+    /// when *any* document mutates (e.g. the backlinks panel, since changes
+    /// to OTHER documents alter the current one's backlinks) can key their
+    /// `.task(id:)` modifier off this counter alongside their primary key.
+    var vaultChangeTick: Int = 0
 
     // MARK: - Helpers
 
