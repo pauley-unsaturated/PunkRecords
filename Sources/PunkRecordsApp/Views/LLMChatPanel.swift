@@ -8,7 +8,13 @@ struct LLMChatPanel: View {
     @State private var messages: [ChatMessage] = []
     @State private var isStreaming = false
     @State private var scope: QueryScope = .global
+    @State private var availableProviders: [LLMProviderID] = []
     @AppStorage("webSearchEnabled") private var isWebSearchEnabled = false
+    @AppStorage("chatProviderID") private var chatProviderRaw: String = LLMProviderID.anthropic.rawValue
+
+    private var selectedProviderID: LLMProviderID {
+        LLMProviderID(rawValue: chatProviderRaw) ?? .anthropic
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,6 +23,7 @@ struct LLMChatPanel: View {
                 Text("AI Chat")
                     .font(.headline)
                 Spacer()
+                providerPicker
                 Toggle("Web", isOn: $isWebSearchEnabled)
                     .toggleStyle(.switch)
                     .controlSize(.mini)
@@ -30,6 +37,8 @@ struct LLMChatPanel: View {
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
+            .background(providerKeyboardShortcuts)
+            .task { await refreshAvailableProviders() }
 
             Divider()
 
@@ -93,6 +102,60 @@ struct LLMChatPanel: View {
         }
     }
 
+    private var providerPicker: some View {
+        Menu {
+            ForEach(LLMProviderID.allCases, id: \.self) { id in
+                Button {
+                    chatProviderRaw = id.rawValue
+                } label: {
+                    HStack {
+                        if id == selectedProviderID {
+                            Image(systemName: "checkmark")
+                        }
+                        Text(id.displayName)
+                        if !availableProviders.contains(id) {
+                            Text("(not configured)").foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .disabled(!availableProviders.contains(id))
+            }
+        } label: {
+            Label(selectedProviderID.displayName, systemImage: "cpu")
+                .font(.caption)
+        }
+        .menuStyle(.borderlessButton)
+        .help("Choose the LLM provider for this conversation. \u{2318}1/2/3 to switch.")
+        .accessibilityIdentifier("chatProviderPicker")
+    }
+
+    /// Hidden buttons that own keyboard shortcuts for provider switching.
+    /// Placed inside `.background` so they receive shortcuts while the chat
+    /// panel is focused but don't take visual space.
+    private var providerKeyboardShortcuts: some View {
+        ZStack {
+            providerShortcutButton(.foundationModels, key: "1")
+            providerShortcutButton(.anthropic, key: "2")
+            providerShortcutButton(.openAI, key: "3")
+        }
+        .frame(width: 0, height: 0)
+        .hidden()
+    }
+
+    private func providerShortcutButton(_ id: LLMProviderID, key: KeyEquivalent) -> some View {
+        Button(id.displayName) {
+            if availableProviders.contains(id) {
+                chatProviderRaw = id.rawValue
+            }
+        }
+        .keyboardShortcut(key, modifiers: .command)
+    }
+
+    private func refreshAvailableProviders() async {
+        guard let orchestrator = appState.orchestrator else { return }
+        availableProviders = await orchestrator.availableProviders()
+    }
+
     private var scopePicker: some View {
         Menu {
             Button("Entire KB") { scope = .global }
@@ -152,7 +215,7 @@ struct LLMChatPanel: View {
         }
 
         do {
-            let provider = try await orchestrator.resolveProvider()
+            let provider = try await orchestrator.resolveProvider(selectedProviderID)
             let contextBuilder = ContextBuilder(searchService: searchIndex, repository: repository)
             let tools: [any AgentTool] = [
                 VaultSearchTool(searchService: searchIndex),
@@ -187,7 +250,12 @@ struct LLMChatPanel: View {
                     if let idx = currentAssistantIndex {
                         messages[idx].content += token
                     } else {
-                        messages.append(ChatMessage(role: .assistant, content: token, context: context))
+                        messages.append(ChatMessage(
+                            role: .assistant,
+                            content: token,
+                            context: context,
+                            providerID: selectedProviderID
+                        ))
                         currentAssistantIndex = messages.count - 1
                     }
                 case .toolStart(let name, let args):
@@ -286,6 +354,10 @@ struct ChatMessage: Identifiable {
     var context: MessageContext? = nil
     /// Populated when role == .tool — the agent tool invocation this row represents.
     var toolCall: ToolCallInfo? = nil
+    /// For assistant messages: which provider produced this output. Drives the
+    /// "via Claude / GPT / Apple" attribution chip and lets future "rerun with
+    /// a different model" actions know what to switch *from*.
+    var providerID: LLMProviderID? = nil
 
     enum Role {
         case user, assistant, tool
@@ -320,6 +392,13 @@ private struct ChatBubble: View {
 
             if message.role == .assistant && !message.content.isEmpty {
                 HStack(spacing: 8) {
+                    if let providerID = message.providerID {
+                        Text("via \(providerID.displayName)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("messageProviderAttribution")
+                    }
+
                     Button("Save as Note", systemImage: "doc.badge.plus") {
                         onSaveAsNote()
                     }

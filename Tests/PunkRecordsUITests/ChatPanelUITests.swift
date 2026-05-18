@@ -69,6 +69,16 @@ final class ChatPanelUITests: XCTestCase {
         XCTAssertTrue(disappeared, "Chat panel should close via close button")
     }
 
+    // MARK: - Provider Picker
+
+    func testProviderPickerVisibleInChatHeader() throws {
+        app.buttons["AI Chat"].click()
+
+        let picker = app.descendants(matching: .any)["chatProviderPicker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 3),
+                      "Provider picker should appear in the chat header")
+    }
+
     // MARK: - Ask AI on Selection
 
     func testAskAIContextMenuPopulatesChat() throws {
