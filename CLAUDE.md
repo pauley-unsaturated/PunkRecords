@@ -69,6 +69,21 @@ Infra Layer (Packages/PunkRecordsInfra/) — File I/O, SQLite, LLM API clients
 - Search index lives at `.punkrecords/index.sqlite` inside the vault — derived data, rebuilt on vault open.
 - API keys stored in macOS Keychain via `KeychainService`.
 
+### Image attachment convention
+
+Images authored into notes (pasted, dragged, or screenshot-captured) live at:
+
+```
+{vault}/attachments/{note-stem}/{filename}
+```
+
+where `{note-stem}` mirrors the note's relative path with the `.md` extension removed. An image attached to `Daily/2026-05-18.md` lives at `attachments/Daily/2026-05-18/foo.png`.
+
+- Markdown references use vault-relative paths: `![alt](attachments/Daily/2026-05-18/foo.png)`. No leading slash, no `file://`.
+- Filename collisions within a single note's attachments dir get an 8-character UUID suffix on the stem: `foo.png` → `foo-a1b2c3d4.png`.
+- Spaces in paths are percent-encoded in markdown references for parser compatibility.
+- Canonical implementation: `VaultPaths` in Core/Utilities. Use it from every write path that creates an attachment.
+
 ### Test Organization
 
 - **Unit tests** live inside each package (`PunkRecordsCoreTests`, `PunkRecordsInfraTests`).
