@@ -71,6 +71,7 @@ struct VaultWindow: View {
 extension Notification.Name {
     static let vaultWindowCreateNote = Notification.Name("vaultWindowCreateNote")
     static let vaultWindowFindInVault = Notification.Name("vaultWindowFindInVault")
+    static let vaultWindowFocusSidebarSearch = Notification.Name("vaultWindowFocusSidebarSearch")
 }
 
 // MARK: - UI Testing Support

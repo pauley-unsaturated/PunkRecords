@@ -10,43 +10,54 @@ struct VaultBrowserView: View {
     @State private var deleteCandidate: Document?
     @State private var showDeleteDialog = false
 
-    private var groupedByFolder: [FolderGroup] {
-        var groups: [String: [Document]] = [:]
-        for doc in appState.documents {
-            let folder = (doc.path as NSString).deletingLastPathComponent
-            groups[folder, default: []].append(doc)
-        }
-        return groups
-            .map { FolderGroup(folder: $0.key, documents: $0.value.sorted { $0.title < $1.title }) }
-            .sorted { $0.folder < $1.folder }
+    @State private var searchQuery: String = ""
+    @FocusState private var isSearchFocused: Bool
+
+    private var isFiltering: Bool {
+        !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var groupedByFolder: [SidebarFolderGroup] {
+        SidebarFilter.filter(documents: appState.documents, query: searchQuery)
     }
 
     var body: some View {
         @Bindable var appState = appState
 
-        List(selection: $appState.selectedDocumentPath) {
-            if let vault = appState.currentVault {
-                Section(vault.name) {
-                    ForEach(groupedByFolder, id: \.folder) { group in
-                        if group.folder.isEmpty {
-                            ForEach(group.documents) { doc in
-                                row(for: doc, vaultRoot: vault.rootURL)
-                            }
+        VStack(spacing: 0) {
+            searchField
+            Divider()
+
+            List(selection: $appState.selectedDocumentPath) {
+                if let vault = appState.currentVault {
+                    Section(vault.name) {
+                        if groupedByFolder.isEmpty && isFiltering {
+                            Text("No matches")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .padding(.vertical, 4)
                         } else {
-                            DisclosureGroup(group.folder) {
-                                ForEach(group.documents) { doc in
-                                    row(for: doc, vaultRoot: vault.rootURL)
+                            ForEach(groupedByFolder) { group in
+                                if group.folder.isEmpty {
+                                    ForEach(group.documents) { doc in
+                                        row(for: doc, vaultRoot: vault.rootURL)
+                                    }
+                                } else {
+                                    folderDisclosure(group, vaultRoot: vault.rootURL)
                                 }
                             }
                         }
                     }
                 }
             }
+            .listStyle(.sidebar)
         }
-        .listStyle(.sidebar)
         .onKeyPress(.return, action: handleReturnKey)
         .onChange(of: appState.selectedDocumentPath) { _, newPath in
             commitRenameOnSelectionChange(newPath: newPath)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .vaultWindowFocusSidebarSearch)) { _ in
+            isSearchFocused = true
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -69,6 +80,84 @@ struct VaultBrowserView: View {
         }
     }
 
+    // MARK: - Search field
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .imageScale(.small)
+            TextField("Filter", text: $searchQuery)
+                .textFieldStyle(.plain)
+                .focused($isSearchFocused)
+                .accessibilityIdentifier("sidebarSearchField")
+                .onKeyPress(.escape) {
+                    if searchQuery.isEmpty {
+                        isSearchFocused = false
+                    } else {
+                        searchQuery = ""
+                    }
+                    return .handled
+                }
+            if !searchQuery.isEmpty {
+                Button {
+                    searchQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .imageScale(.small)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("sidebarSearchClear")
+                .accessibilityLabel("Clear filter")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+
+    // MARK: - Rows
+
+    @ViewBuilder
+    private func folderDisclosure(_ group: SidebarFolderGroup, vaultRoot: URL) -> some View {
+        // When filtering, force every folder containing a match to stay
+        // expanded so the matches are actually visible without an extra
+        // click. When unfiltered, restore the default folded behavior.
+        if isFiltering {
+            DisclosureGroup(isExpanded: .constant(true)) {
+                ForEach(group.documents) { doc in
+                    row(for: doc, vaultRoot: vaultRoot)
+                }
+            } label: {
+                folderLabel(group)
+            }
+        } else {
+            DisclosureGroup {
+                ForEach(group.documents) { doc in
+                    row(for: doc, vaultRoot: vaultRoot)
+                }
+            } label: {
+                folderLabel(group)
+            }
+        }
+    }
+
+    private func folderLabel(_ group: SidebarFolderGroup) -> some View {
+        HStack {
+            Text(group.folder)
+            if isFiltering {
+                Spacer()
+                Text("\(group.hitCount)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(.quaternary, in: Capsule())
+                    .accessibilityLabel("\(group.hitCount) matches")
+            }
+        }
+    }
+
     private func row(for doc: Document, vaultRoot: URL) -> some View {
         DocumentRow(
             document: doc,
@@ -82,6 +171,8 @@ struct VaultBrowserView: View {
             onRequestDelete: { requestDelete(doc) }
         )
     }
+
+    // MARK: - Helpers (unchanged behavior)
 
     private var deletePrompt: String {
         guard let doc = deleteCandidate else { return "" }
@@ -137,10 +228,4 @@ struct VaultBrowserView: View {
     VaultBrowserView()
         .environment(PreviewData.makePreviewAppState())
         .frame(width: 250, height: 400)
-}
-
-private struct FolderGroup: Identifiable {
-    let folder: String
-    let documents: [Document]
-    var id: String { folder }
 }

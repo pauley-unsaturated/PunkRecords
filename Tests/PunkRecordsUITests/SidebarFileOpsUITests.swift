@@ -53,6 +53,42 @@ final class SidebarFileOpsUITests: XCTestCase {
                        "Original Test Note row should no longer be present")
     }
 
+    func testCmdShiftFFocusesSidebarSearch() throws {
+        let field = app.textFields["sidebarSearchField"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5),
+                      "Sidebar search field should be present in the vault browser")
+
+        // Verify focus indirectly: typing after Cmd+Shift+F should land in the field.
+        app.typeKey("f", modifierFlags: [.command, .shift])
+        app.typeText("X")
+        XCTAssertEqual(field.value as? String, "X",
+                       "Cmd+Shift+F should focus the field so subsequent typing lands there")
+    }
+
+    func testSidebarSearchFiltersRows() throws {
+        // Vault has two notes: "Test Note" and "Scratch Note"
+        XCTAssertTrue(app.staticTexts["Test Note"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Scratch Note"].exists)
+
+        let field = app.textFields["sidebarSearchField"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+
+        app.typeKey("f", modifierFlags: [.command, .shift])
+        app.typeText("Scratch")
+
+        // After filtering, only Scratch Note remains in the sidebar.
+        XCTAssertTrue(app.staticTexts["Scratch Note"].waitForExistence(timeout: 3))
+
+        let testRowVisible = app.staticTexts["Test Note"].exists
+        XCTAssertFalse(testRowVisible,
+                       "Test Note should be filtered out when query is 'Scratch'")
+
+        // Escape clears the filter and Test Note returns.
+        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+        XCTAssertTrue(app.staticTexts["Test Note"].waitForExistence(timeout: 3),
+                      "Escape on a non-empty filter should clear it and restore all rows")
+    }
+
     func testCmdShiftPTogglesMarkdownPreview() throws {
         app.staticTexts["Test Note"].click()
 

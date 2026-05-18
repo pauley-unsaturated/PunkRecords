@@ -40,10 +40,15 @@ struct PunkRecordsApp: App {
                 .keyboardShortcut("n")
             }
             CommandGroup(after: .textEditing) {
-                Button("Find in Vault") {
-                    NotificationCenter.default.post(name: .vaultWindowFindInVault, object: nil)
+                Button("Filter Sidebar") {
+                    NotificationCenter.default.post(name: .vaultWindowFocusSidebarSearch, object: nil)
                 }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
+
+                Button("Find by Content…") {
+                    NotificationCenter.default.post(name: .vaultWindowFindInVault, object: nil)
+                }
+                .keyboardShortcut("f", modifiers: [.command, .option])
             }
         }
 
