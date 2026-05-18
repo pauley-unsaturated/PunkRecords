@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 import PunkRecordsCore
 
 /// A single vault window. Each open KB gets its own instance with its own AppState.
@@ -63,6 +65,42 @@ struct VaultWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: .vaultWindowFindInVault)) { _ in
             appState.isSearchPresented = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: .vaultWindowExportHTML)) { _ in
+            Task { @MainActor in await exportCurrentDocumentAsHTML() }
+        }
+    }
+
+    /// Renders the currently-selected note to a self-contained HTML file
+    /// and presents NSSavePanel for the destination. No-op if no doc is
+    /// selected. Errors surface via AppState.errorMessage.
+    @MainActor
+    private func exportCurrentDocumentAsHTML() async {
+        guard let doc = appState.selectedDocument else {
+            appState.errorMessage = "Select a note before exporting."
+            return
+        }
+
+        let html = MarkdownHTMLRenderer.renderHTMLDocument(
+            markdown: doc.content,
+            title: doc.title
+        )
+
+        let panel = NSSavePanel()
+        panel.title = "Export as HTML"
+        panel.nameFieldStringValue = "\(FilenameHelpers.sanitizeFilename(doc.title)).html"
+        if let htmlType = UTType(filenameExtension: "html") {
+            panel.allowedContentTypes = [htmlType]
+        }
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            try html.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            appState.errorMessage = "Failed to export: \(error.localizedDescription)"
+        }
     }
 }
 
@@ -72,6 +110,7 @@ extension Notification.Name {
     static let vaultWindowCreateNote = Notification.Name("vaultWindowCreateNote")
     static let vaultWindowFindInVault = Notification.Name("vaultWindowFindInVault")
     static let vaultWindowFocusSidebarSearch = Notification.Name("vaultWindowFocusSidebarSearch")
+    static let vaultWindowExportHTML = Notification.Name("vaultWindowExportHTML")
 }
 
 // MARK: - UI Testing Support

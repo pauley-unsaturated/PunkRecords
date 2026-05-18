@@ -39,6 +39,13 @@ struct PunkRecordsApp: App {
                 }
                 .keyboardShortcut("n")
             }
+            CommandGroup(after: .saveItem) {
+                Divider()
+                Button("Export as HTML…") {
+                    NotificationCenter.default.post(name: .vaultWindowExportHTML, object: nil)
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+            }
             CommandGroup(after: .textEditing) {
                 Button("Filter Sidebar") {
                     NotificationCenter.default.post(name: .vaultWindowFocusSidebarSearch, object: nil)
