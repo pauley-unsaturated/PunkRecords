@@ -12,6 +12,7 @@ final class DocumentEditorViewModel {
 
     private let repository: FileSystemDocumentRepository
     private let searchIndex: SQLiteSearchIndex?
+    private let canonicalParser = CanonicalMarkdownParser()
 
     init(
         document: Document,
@@ -43,6 +44,9 @@ final class DocumentEditorViewModel {
         guard isDirty else { return }
         isSaving = true
         defer { isSaving = false }
+
+        // Canonical AST snapshot — feeds future export and Quick Look paths.
+        _ = canonicalParser.parse(document.content)
 
         try await repository.save(document)
 

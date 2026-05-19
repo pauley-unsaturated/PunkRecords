@@ -97,11 +97,6 @@ struct RawEditorView: View {
     }
 }
 
-#Preview("Syntax Highlighting") {
-    SyntaxHighlightPreview()
-        .frame(width: 700, height: 600)
-}
-
 #Preview("Raw Editor — With Document") {
     EditorTextViewRepresentable(
         viewModel: DocumentEditorViewModel(
@@ -116,41 +111,7 @@ struct RawEditorView: View {
     .frame(width: 700, height: 500)
 }
 
-/// Standalone preview that renders sample markdown with syntax highlighting applied.
-private struct SyntaxHighlightPreview: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSTextView.scrollableTextView()
-        guard let textView = scrollView.documentView as? NSTextView else {
-            return scrollView
-        }
-
-        textView.isEditable = true
-        textView.isSelectable = true
-        textView.isRichText = true
-        textView.backgroundColor = .textBackgroundColor
-
-        textView.string = PreviewData.markdownSample
-
-        // Create a throwaway coordinator just to apply highlighting
-        let repo = FileSystemDocumentRepository(
-            vaultRoot: URL(fileURLWithPath: "/tmp"),
-            ignoredPaths: []
-        )
-        let vm = DocumentEditorViewModel(
-            document: PreviewData.sampleDocument,
-            repository: repo,
-            searchIndex: nil
-        )
-        let coordinator = EditorTextViewRepresentable.Coordinator(viewModel: vm)
-        coordinator.applySyntaxHighlighting(to: textView)
-
-        return scrollView
-    }
-
-    func updateNSView(_ nsView: NSScrollView, context: Context) {}
-}
-
-/// NSViewRepresentable wrapper for NSTextView with syntax highlighting.
+/// NSViewRepresentable wrapper for NSTextView with tree-sitter syntax highlighting.
 struct EditorTextViewRepresentable: NSViewRepresentable {
     let viewModel: DocumentEditorViewModel
     var onAskAI: ((String) -> Void)?
@@ -178,10 +139,17 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         textView.usesFindBar = true
         textView.isIncrementalSearchingEnabled = true
         textView.backgroundColor = .textBackgroundColor
+        textView.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
+        textView.textColor = .textColor
 
         textView.string = viewModel.document.content
         textView.delegate = context.coordinator
-        context.coordinator.applySyntaxHighlighting(to: textView)
+
+        do {
+            context.coordinator.highlighter = try TreeSitterMarkdownHighlighter(textView: textView)
+        } catch {
+            assertionFailure("Failed to initialize TreeSitterMarkdownHighlighter: \(error)")
+        }
 
         // Make the NSTextView reachable from XCUITest. The wrapping
         // SwiftUI .accessibilityIdentifier modifier lands on a parent
@@ -196,7 +164,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         if !viewModel.isDirty && textView.string != viewModel.document.content {
             textView.string = viewModel.document.content
-            context.coordinator.applySyntaxHighlighting(to: textView)
+            context.coordinator.highlighter?.invalidateAll()
         }
     }
 
@@ -211,7 +179,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         let viewModel: DocumentEditorViewModel
         let onAskAI: ((String) -> Void)?
         var onSelectionChanged: ((String?) -> Void)?
-        private let highlighter = RegexSyntaxHighlighter()
+        var highlighter: TreeSitterMarkdownHighlighter?
         private var debounceTask: Task<Void, Never>?
 
         init(viewModel: DocumentEditorViewModel, onAskAI: ((String) -> Void)? = nil) {
@@ -253,111 +221,12 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             viewModel.updateContent(textView.string)
-            applySyntaxHighlighting(to: textView)
 
             debounceTask?.cancel()
             debounceTask = Task {
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled else { return }
                 try? await viewModel.save()
-            }
-        }
-
-        func applySyntaxHighlighting(to textView: NSTextView) {
-            guard let textStorage = textView.textStorage else { return }
-            let text = textView.string
-            let fullRange = NSRange(location: 0, length: (text as NSString).length)
-
-            // Preserve cursor position
-            let selectedRanges = textView.selectedRanges
-
-            textStorage.beginEditing()
-
-            // Reset to base style
-            let baseFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
-            let baseAttrs: [NSAttributedString.Key: Any] = [
-                .font: baseFont,
-                .foregroundColor: NSColor.textColor,
-            ]
-            textStorage.setAttributes(baseAttrs, range: fullRange)
-
-            // Apply highlights
-            let highlights = highlighter.highlight(text)
-            for highlight in highlights {
-                guard highlight.range.location + highlight.range.length <= fullRange.length else { continue }
-                let attrs = attributes(for: highlight.style, baseFont: baseFont)
-                textStorage.addAttributes(attrs, range: highlight.range)
-            }
-
-            textStorage.endEditing()
-
-            // Restore cursor
-            textView.selectedRanges = selectedRanges
-        }
-
-        private func attributes(for style: HighlightStyle, baseFont: NSFont) -> [NSAttributedString.Key: Any] {
-            switch style {
-            case .heading(let level):
-                let sizes: [Int: CGFloat] = [1: 24, 2: 20, 3: 17, 4: 15, 5: 14, 6: 13]
-                let size = sizes[level] ?? 14
-                return [
-                    .font: NSFont.monospacedSystemFont(ofSize: size, weight: .bold),
-                    .foregroundColor: NSColor.labelColor,
-                ]
-            case .bold:
-                return [.font: NSFont.monospacedSystemFont(ofSize: 14, weight: .bold)]
-            case .italic:
-                let font = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
-                return [.font: font]
-            case .boldItalic:
-                let bold = NSFont.monospacedSystemFont(ofSize: 14, weight: .bold)
-                let font = NSFontManager.shared.convert(bold, toHaveTrait: .italicFontMask)
-                return [.font: font]
-            case .strikethrough:
-                return [
-                    .strikethroughStyle: NSUnderlineStyle.single.rawValue,
-                    .foregroundColor: NSColor.secondaryLabelColor,
-                ]
-            case .inlineCode:
-                return [
-                    .foregroundColor: NSColor.systemPink,
-                    .backgroundColor: NSColor.quaternaryLabelColor,
-                ]
-            case .codeBlock:
-                return [
-                    .foregroundColor: NSColor.systemGreen,
-                    .backgroundColor: NSColor.quaternaryLabelColor,
-                ]
-            case .codeBlockLanguage:
-                return [
-                    .foregroundColor: NSColor.systemTeal,
-                    .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .medium),
-                ]
-            case .blockquote:
-                return [.foregroundColor: NSColor.systemMint]
-            case .wikilink:
-                return [
-                    .foregroundColor: NSColor.systemBlue,
-                    .underlineStyle: NSUnderlineStyle.single.rawValue,
-                ]
-            case .unresolvedWikilink:
-                return [
-                    .foregroundColor: NSColor.systemRed,
-                    .underlineStyle: NSUnderlineStyle.single.rawValue,
-                ]
-            case .link:
-                return [
-                    .foregroundColor: NSColor.systemBlue,
-                    .underlineStyle: NSUnderlineStyle.single.rawValue,
-                ]
-            case .tag:
-                return [.foregroundColor: NSColor.systemOrange]
-            case .listMarker:
-                return [.foregroundColor: NSColor.systemYellow]
-            case .taskMarker:
-                return [.foregroundColor: NSColor.systemPurple]
-            case .horizontalRule:
-                return [.foregroundColor: NSColor.separatorColor]
             }
         }
     }
