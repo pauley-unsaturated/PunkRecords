@@ -39,6 +39,12 @@ struct PunkRecordsApp: App {
                 }
                 .keyboardShortcut("n")
             }
+            CommandGroup(after: .newItem) {
+                Button("Open Quickly…") {
+                    NotificationCenter.default.post(name: .vaultWindowQuickOpen, object: nil)
+                }
+                .keyboardShortcut("o", modifiers: [.command])
+            }
             CommandGroup(after: .saveItem) {
                 Divider()
                 Button("Export as HTML…") {
@@ -52,10 +58,12 @@ struct PunkRecordsApp: App {
                 }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
 
+                // ⌘⌥⇧F to leave ⌘⌥F available for NSTextView's standard
+                // Find-and-Replace bar (the in-editor find acceptance for W5).
                 Button("Find by Content…") {
                     NotificationCenter.default.post(name: .vaultWindowFindInVault, object: nil)
                 }
-                .keyboardShortcut("f", modifiers: [.command, .option])
+                .keyboardShortcut("f", modifiers: [.command, .option, .shift])
             }
         }
 

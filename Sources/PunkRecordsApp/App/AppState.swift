@@ -8,6 +8,7 @@ import PunkRecordsInfra
 final class AppState {
     var currentVault: Vault?
     var isSearchPresented = false
+    var isQuickOpenPresented = false
     var isChatPanelVisible = false
     var isBacklinksPanelVisible = true
     var isLoading = false

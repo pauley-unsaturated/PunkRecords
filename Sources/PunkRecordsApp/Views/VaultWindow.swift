@@ -46,6 +46,12 @@ struct VaultWindow: View {
         )) {
             SearchView()
         }
+        .sheet(isPresented: Binding(
+            get: { appState.isQuickOpenPresented },
+            set: { appState.isQuickOpenPresented = $0 }
+        )) {
+            QuickOpenView()
+        }
         .environment(appState)
         .navigationTitle(appState.currentVault?.name ?? "PunkRecords")
         .task {
@@ -67,6 +73,9 @@ struct VaultWindow: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .vaultWindowExportHTML)) { _ in
             Task { @MainActor in await exportCurrentDocumentAsHTML() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .vaultWindowQuickOpen)) { _ in
+            appState.isQuickOpenPresented = true
         }
     }
 
@@ -111,6 +120,7 @@ extension Notification.Name {
     static let vaultWindowFindInVault = Notification.Name("vaultWindowFindInVault")
     static let vaultWindowFocusSidebarSearch = Notification.Name("vaultWindowFocusSidebarSearch")
     static let vaultWindowExportHTML = Notification.Name("vaultWindowExportHTML")
+    static let vaultWindowQuickOpen = Notification.Name("vaultWindowQuickOpen")
 }
 
 // MARK: - UI Testing Support
