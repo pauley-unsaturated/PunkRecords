@@ -150,6 +150,8 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         } catch {
             assertionFailure("Failed to initialize TreeSitterMarkdownHighlighter: \(error)")
         }
+        context.coordinator.decorator = HybridUXDecorator()
+        context.coordinator.decorator?.decorate(textView: textView)
 
         // Make the NSTextView reachable from XCUITest. The wrapping
         // SwiftUI .accessibilityIdentifier modifier lands on a parent
@@ -165,6 +167,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         if !viewModel.isDirty && textView.string != viewModel.document.content {
             textView.string = viewModel.document.content
             context.coordinator.highlighter?.invalidateAll()
+            context.coordinator.decorator?.decorate(textView: textView)
         }
     }
 
@@ -180,6 +183,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         let onAskAI: ((String) -> Void)?
         var onSelectionChanged: ((String?) -> Void)?
         var highlighter: TreeSitterMarkdownHighlighter?
+        var decorator: HybridUXDecorator?
         private var debounceTask: Task<Void, Never>?
 
         init(viewModel: DocumentEditorViewModel, onAskAI: ((String) -> Void)? = nil) {
@@ -196,6 +200,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             } else {
                 onSelectionChanged?(nil)
             }
+            decorator?.decorate(textView: textView)
         }
 
         func textView(_ textView: NSTextView, menu: NSMenu, for event: NSEvent, at charIndex: Int) -> NSMenu? {
@@ -221,6 +226,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             viewModel.updateContent(textView.string)
+            decorator?.decorate(textView: textView)
 
             debounceTask?.cancel()
             debounceTask = Task {
