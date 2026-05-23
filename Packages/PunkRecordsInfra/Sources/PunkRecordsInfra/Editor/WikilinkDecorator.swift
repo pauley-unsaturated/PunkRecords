@@ -57,20 +57,24 @@ public final class WikilinkDecorator {
     // MARK: - Decoration
 
     public func decorate(textView: NSTextView) {
+        decorate(textView: textView, in: EditorDecorationRange.scanRange(for: textView))
+    }
+
+    /// Decorate only `scanRange` — limits per-keystroke work to the visible region.
+    public func decorate(textView: NSTextView, in scanRange: NSRange) {
         guard let textStorage = textView.textStorage else { return }
         let text = textView.string as NSString
-        guard text.length > 0 else { return }
+        guard text.length > 0, scanRange.length > 0 else { return }
         let caret = textView.selectedRange().location
 
         textStorage.beginEditing()
-        decorateWikilinks(in: textStorage, text: text, caret: caret)
-        decorateTags(in: textStorage, text: text, caret: caret)
+        decorateWikilinks(in: textStorage, text: text, scanRange: scanRange, caret: caret)
+        decorateTags(in: textStorage, text: text, scanRange: scanRange, caret: caret)
         textStorage.endEditing()
     }
 
-    private func decorateWikilinks(in storage: NSTextStorage, text: NSString, caret: Int) {
-        let full = NSRange(location: 0, length: text.length)
-        Self.wikilinkRegex.enumerateMatches(in: text as String, range: full) { match, _, _ in
+    private func decorateWikilinks(in storage: NSTextStorage, text: NSString, scanRange: NSRange, caret: Int) {
+        Self.wikilinkRegex.enumerateMatches(in: text as String, range: scanRange) { match, _, _ in
             guard let match else { return }
             let whole = match.range
             let inner = match.range(at: 1)
@@ -108,9 +112,8 @@ public final class WikilinkDecorator {
         }
     }
 
-    private func decorateTags(in storage: NSTextStorage, text: NSString, caret: Int) {
-        let full = NSRange(location: 0, length: text.length)
-        Self.tagRegex.enumerateMatches(in: text as String, range: full) { match, _, _ in
+    private func decorateTags(in storage: NSTextStorage, text: NSString, scanRange: NSRange, caret: Int) {
+        Self.tagRegex.enumerateMatches(in: text as String, range: scanRange) { match, _, _ in
             guard let match else { return }
             let whole = match.range
             let name = text.substring(with: match.range(at: 1))

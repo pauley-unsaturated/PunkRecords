@@ -220,6 +220,13 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         textView.onOpenWikilink = onOpenWikilink
         context.coordinator.runDecorations(on: textView)
 
+        // Re-decorate the newly visible region when the user scrolls — decoration
+        // is limited to the visible range for performance, so scrolled-in content
+        // needs a fresh pass.
+        let clipView = scrollView.contentView
+        clipView.postsBoundsChangedNotifications = true
+        context.coordinator.observeScroll(of: clipView, textView: textView)
+
         // Make the NSTextView reachable from XCUITest. The wrapping
         // SwiftUI .accessibilityIdentifier modifier lands on a parent
         // view; we need the id on the TextView element itself so
@@ -259,11 +266,35 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             self.onAskAI = onAskAI
         }
 
+        private var scrollObserver: NSObjectProtocol?
+
         /// Run the hybrid-UX and wikilink decoration passes in order.
         /// Wikilink pills go last so they win on any overlapping range.
+        ///
+        /// Skipped while an IME composition is in progress (marked text):
+        /// rewriting attributes mid-composition can disrupt Japanese/Chinese/
+        /// Korean input. Decoration resumes once the composition commits.
         func runDecorations(on textView: NSTextView) {
+            guard !textView.hasMarkedText() else { return }
             decorator?.decorate(textView: textView)
             wikilinkDecorator?.decorate(textView: textView)
+        }
+
+        /// Re-run decorations on scroll so content scrolled into view is styled.
+        /// The block holds `self` weakly, so it no-ops once the coordinator is
+        /// gone; the observer is released when the clip view is deallocated.
+        func observeScroll(of clipView: NSClipView, textView: NSTextView) {
+            if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
+            scrollObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: clipView,
+                queue: .main
+            ) { [weak self, weak textView] _ in
+                guard let self, let textView else { return }
+                MainActor.assumeIsolated {
+                    self.runDecorations(on: textView)
+                }
+            }
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
@@ -302,6 +333,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else { return }
             viewModel.updateContent(textView.string)
             runDecorations(on: textView)
+            maybeShowSlashMenu(in: textView)
 
             debounceTask?.cancel()
             debounceTask = Task {
@@ -309,6 +341,83 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
                 guard !Task.isCancelled else { return }
                 try? await viewModel.save()
             }
+        }
+
+        // MARK: - Slash command palette
+
+        /// Pops up the slash-command menu when the user has just typed a bare
+        /// `/` at the start of a line or after whitespace.
+        private func maybeShowSlashMenu(in textView: NSTextView) {
+            let caret = textView.selectedRange().location
+            guard let session = SlashCommandLibrary.activeSession(
+                in: textView.string,
+                caretLocation: caret
+            ), session.query.isEmpty else { return }
+
+            let menu = NSMenu()
+            for command in SlashCommandLibrary.all {
+                let item = NSMenuItem(
+                    title: command.title,
+                    action: #selector(slashCommandSelected(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.image = NSImage(systemSymbolName: command.systemImage, accessibilityDescription: command.title)
+                item.toolTip = command.subtitle
+                item.representedObject = SlashMenuContext(
+                    textView: textView,
+                    command: command,
+                    replaceLocation: session.replaceRange.lowerBound,
+                    replaceLength: session.replaceRange.count
+                )
+                menu.addItem(item)
+            }
+
+            let point = caretPoint(in: textView, at: session.replaceRange.lowerBound)
+            menu.popUp(positioning: nil, at: point, in: textView)
+        }
+
+        private func caretPoint(in textView: NSTextView, at location: Int) -> NSPoint {
+            guard let layoutManager = textView.layoutManager,
+                  let container = textView.textContainer else {
+                return .zero
+            }
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: NSRange(location: location, length: 0),
+                actualCharacterRange: nil
+            )
+            var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: container)
+            let origin = textView.textContainerOrigin
+            rect.origin.x += origin.x
+            rect.origin.y += origin.y
+            return NSPoint(x: rect.minX, y: rect.maxY + 2)
+        }
+
+        @objc private func slashCommandSelected(_ sender: NSMenuItem) {
+            guard let ctx = sender.representedObject as? SlashMenuContext else { return }
+            let textView = ctx.textView
+            let nsRange = NSRange(location: ctx.replaceLocation, length: ctx.replaceLength)
+            guard textView.shouldChangeText(in: nsRange, replacementString: ctx.command.snippet) else { return }
+            textView.textStorage?.replaceCharacters(in: nsRange, with: ctx.command.snippet)
+            textView.didChangeText()
+            let caret = ctx.replaceLocation + ctx.command.caretOffset
+            textView.setSelectedRange(NSRange(location: caret, length: 0))
+            runDecorations(on: textView)
+        }
+    }
+
+    /// Carries everything `slashCommandSelected` needs from the menu item.
+    private final class SlashMenuContext: NSObject {
+        let textView: NSTextView
+        let command: SlashCommand
+        let replaceLocation: Int
+        let replaceLength: Int
+
+        init(textView: NSTextView, command: SlashCommand, replaceLocation: Int, replaceLength: Int) {
+            self.textView = textView
+            self.command = command
+            self.replaceLocation = replaceLocation
+            self.replaceLength = replaceLength
         }
     }
 }

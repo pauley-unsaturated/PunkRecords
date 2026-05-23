@@ -70,22 +70,28 @@ public final class HybridUXDecorator {
     /// Apply hybrid-markdown decorations to the text view based on its current
     /// content and caret position. Safe to call repeatedly.
     public func decorate(textView: NSTextView) {
+        decorate(textView: textView, in: EditorDecorationRange.scanRange(for: textView))
+    }
+
+    /// Decorate only `scanRange` — used to limit per-keystroke work to the
+    /// visible region on large documents.
+    public func decorate(textView: NSTextView, in scanRange: NSRange) {
         guard let textStorage = textView.textStorage else { return }
         let text = textView.string as NSString
-        let fullLength = text.length
-        guard fullLength > 0 else { return }
+        guard text.length > 0, scanRange.length > 0 else { return }
 
         let caretLocation = textView.selectedRange().location
         let proximity = style.proximity
 
         textStorage.beginEditing()
 
-        applyHeadingSizes(to: textStorage, text: text)
-        applyBlockquoteStyling(to: textStorage, text: text)
-        applyHorizontalRuleStyling(to: textStorage, text: text)
+        applyHeadingSizes(to: textStorage, text: text, in: scanRange)
+        applyBlockquoteStyling(to: textStorage, text: text, in: scanRange)
+        applyHorizontalRuleStyling(to: textStorage, text: text, in: scanRange)
         applyMarkerDimming(
             to: textStorage,
             text: text,
+            in: scanRange,
             caretLocation: caretLocation,
             proximity: proximity
         )
@@ -100,9 +106,8 @@ public final class HybridUXDecorator {
         try! NSRegularExpression(pattern: #"^( {0,3})(#{1,6})\s+(.*)$"#, options: [.anchorsMatchLines])
     }()
 
-    private func applyHeadingSizes(to textStorage: NSTextStorage, text: NSString) {
-        let fullRange = NSRange(location: 0, length: text.length)
-        Self.headingRegex.enumerateMatches(in: text as String, range: fullRange) { match, _, _ in
+    private func applyHeadingSizes(to textStorage: NSTextStorage, text: NSString, in scanRange: NSRange) {
+        Self.headingRegex.enumerateMatches(in: text as String, range: scanRange) { match, _, _ in
             guard let match else { return }
             let hashRange = match.range(at: 2)
             let level = hashRange.length
@@ -119,9 +124,8 @@ public final class HybridUXDecorator {
         try! NSRegularExpression(pattern: #"^( {0,3}>+\s?.*)$"#, options: [.anchorsMatchLines])
     }()
 
-    private func applyBlockquoteStyling(to textStorage: NSTextStorage, text: NSString) {
-        let fullRange = NSRange(location: 0, length: text.length)
-        Self.blockquoteRegex.enumerateMatches(in: text as String, range: fullRange) { match, _, _ in
+    private func applyBlockquoteStyling(to textStorage: NSTextStorage, text: NSString, in scanRange: NSRange) {
+        Self.blockquoteRegex.enumerateMatches(in: text as String, range: scanRange) { match, _, _ in
             guard let match else { return }
             textStorage.addAttribute(.foregroundColor, value: style.blockquoteColor, range: match.range)
         }
@@ -131,9 +135,8 @@ public final class HybridUXDecorator {
         try! NSRegularExpression(pattern: #"^( {0,3})([-*_])(\s*\2){2,}\s*$"#, options: [.anchorsMatchLines])
     }()
 
-    private func applyHorizontalRuleStyling(to textStorage: NSTextStorage, text: NSString) {
-        let fullRange = NSRange(location: 0, length: text.length)
-        Self.horizontalRuleRegex.enumerateMatches(in: text as String, range: fullRange) { match, _, _ in
+    private func applyHorizontalRuleStyling(to textStorage: NSTextStorage, text: NSString, in scanRange: NSRange) {
+        Self.horizontalRuleRegex.enumerateMatches(in: text as String, range: scanRange) { match, _, _ in
             guard let match else { return }
             textStorage.addAttribute(.foregroundColor, value: style.horizontalRuleColor, range: match.range)
         }
@@ -161,12 +164,12 @@ public final class HybridUXDecorator {
     private func applyMarkerDimming(
         to textStorage: NSTextStorage,
         text: NSString,
+        in scanRange: NSRange,
         caretLocation: Int,
         proximity: Int
     ) {
-        let fullRange = NSRange(location: 0, length: text.length)
         for regex in Self.markerRegexes {
-            regex.enumerateMatches(in: text as String, range: fullRange) { match, _, _ in
+            regex.enumerateMatches(in: text as String, range: scanRange) { match, _, _ in
                 guard let match else { return }
                 let markerRange = match.range
                 let color = HybridUXDecorator.isNear(
