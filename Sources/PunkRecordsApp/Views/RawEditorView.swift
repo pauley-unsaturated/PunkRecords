@@ -29,12 +29,8 @@ struct RawEditorView: View {
                                 $0.title.caseInsensitiveCompare(target) == .orderedSame
                             }
                         },
-                        onOpenWikilink: { target in
-                            if let doc = appState.documents.first(where: {
-                                $0.title.caseInsensitiveCompare(target) == .orderedSame
-                            }) {
-                                appState.selectedDocumentPath = doc.path
-                            }
+                        onWikilinkClick: { action in
+                            handleWikilinkClick(action)
                         }
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -75,6 +71,27 @@ struct RawEditorView: View {
         }
         .task(id: documentPath) {
             await loadDocument()
+        }
+    }
+
+    /// Open the clicked wikilink, or prompt to create it when it has no note.
+    private func handleWikilinkClick(_ action: WikilinkDecorator.ClickAction) {
+        switch action {
+        case .open(let target):
+            if let doc = appState.documents.first(where: {
+                $0.title.caseInsensitiveCompare(target) == .orderedSame
+            }) {
+                appState.selectedDocumentPath = doc.path
+            }
+        case .create(let title):
+            let alert = NSAlert()
+            alert.messageText = "Create “\(title)”?"
+            alert.informativeText = "No note titled “\(title)” exists yet. Create it now?"
+            alert.addButton(withTitle: "Create")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn {
+                appState.createNote(titled: title)
+            }
         }
     }
 
@@ -127,17 +144,17 @@ struct RawEditorView: View {
 /// instead of placing the caret. Falls through to normal click behavior
 /// everywhere else.
 final class PillTextView: NSTextView {
-    /// Maps a character index to a wikilink target, or nil if the index
-    /// isn't inside a rendered pill. Set by the Coordinator.
-    var resolveWikilinkTarget: ((Int) -> String?)?
-    /// Invoked with the target when a pill is clicked.
-    var onOpenWikilink: ((String) -> Void)?
+    /// Resolves a character index to a wikilink click action, or nil if the
+    /// index isn't inside a rendered pill. Set by the Coordinator.
+    var resolveWikilinkClick: ((Int) -> WikilinkDecorator.ClickAction?)?
+    /// Invoked with the resolved action when a pill is clicked.
+    var onWikilinkClick: ((WikilinkDecorator.ClickAction) -> Void)?
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         let index = characterIndexForInsertion(at: point)
-        if let target = resolveWikilinkTarget?(index), !target.isEmpty {
-            onOpenWikilink?(target)
+        if let action = resolveWikilinkClick?(index) {
+            onWikilinkClick?(action)
             return
         }
         super.mouseDown(with: event)
@@ -151,7 +168,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
     var onAskAI: ((String) -> Void)?
     var onSelectionChanged: ((String?) -> Void)?
     var isWikilinkResolved: ((String) -> Bool)?
-    var onOpenWikilink: ((String) -> Void)?
+    var onWikilinkClick: ((WikilinkDecorator.ClickAction) -> Void)?
     var theme: EditorTheme = .dracula
 
     init(
@@ -159,14 +176,14 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         onAskAI: ((String) -> Void)? = nil,
         onSelectionChanged: ((String?) -> Void)? = nil,
         isWikilinkResolved: ((String) -> Bool)? = nil,
-        onOpenWikilink: ((String) -> Void)? = nil,
+        onWikilinkClick: ((WikilinkDecorator.ClickAction) -> Void)? = nil,
         theme: EditorTheme = .dracula
     ) {
         self.viewModel = viewModel
         self.onAskAI = onAskAI
         self.onSelectionChanged = onSelectionChanged
         self.isWikilinkResolved = isWikilinkResolved
-        self.onOpenWikilink = onOpenWikilink
+        self.onWikilinkClick = onWikilinkClick
         self.theme = theme
     }
 
@@ -230,11 +247,11 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
                 isResolved: isResolved
             )
         }
-        textView.resolveWikilinkTarget = { [weak coordinator = context.coordinator] index in
+        textView.resolveWikilinkClick = { [weak coordinator = context.coordinator] index in
             guard let coordinator else { return nil }
-            return coordinator.wikilinkDecorator?.wikilinkTarget(at: index, in: textView.string)
+            return coordinator.wikilinkDecorator?.clickAction(at: index, in: textView.string)
         }
-        textView.onOpenWikilink = onOpenWikilink
+        textView.onWikilinkClick = onWikilinkClick
         context.coordinator.runDecorations(on: textView)
 
         // Re-decorate the newly visible region when the user scrolls — decoration

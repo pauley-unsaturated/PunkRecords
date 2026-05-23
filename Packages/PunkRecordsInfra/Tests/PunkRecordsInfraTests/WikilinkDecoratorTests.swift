@@ -79,6 +79,36 @@ struct WikilinkDecoratorTests {
         #expect(decorator.wikilinkTarget(at: 5, in: text) == "Target")
     }
 
+    // MARK: - Click action (open vs create)
+
+    @Test("Click on a resolved link yields .open")
+    func clickResolvedOpens() {
+        let decorator = WikilinkDecorator(isResolved: { $0 == "Foo Note" })
+        let text = "see [[Foo Note]] here"
+        #expect(decorator.clickAction(at: 8, in: text) == .open(target: "Foo Note"))
+    }
+
+    @Test("Click on an unresolved link yields .create")
+    func clickUnresolvedCreates() {
+        let decorator = WikilinkDecorator(isResolved: { _ in false })
+        let text = "see [[Ghost]] here"
+        #expect(decorator.clickAction(at: 8, in: text) == .create(title: "Ghost"))
+    }
+
+    @Test("Click off any link yields nil")
+    func clickOutsideIsNil() {
+        let decorator = WikilinkDecorator(isResolved: { _ in true })
+        let text = "see [[Foo]] here"
+        #expect(decorator.clickAction(at: 0, in: text) == nil)
+    }
+
+    @Test("Click-to-create uses the target half of an alias link")
+    func clickAliasCreatesTarget() {
+        let decorator = WikilinkDecorator(isResolved: { _ in false })
+        let text = "[[Real Title|shown]]"
+        #expect(decorator.clickAction(at: 5, in: text) == .create(title: "Real Title"))
+    }
+
     // MARK: - Decoration application
 
     @Test("Resolved link gets pill background when caret is outside")

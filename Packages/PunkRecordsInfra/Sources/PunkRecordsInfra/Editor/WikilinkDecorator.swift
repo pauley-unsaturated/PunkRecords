@@ -137,10 +137,18 @@ public final class WikilinkDecorator {
         }
     }
 
-    // MARK: - Hit testing (click-to-open)
+    // MARK: - Hit testing (click-to-open / click-to-create)
+
+    /// What should happen when a wikilink pill is clicked.
+    public enum ClickAction: Equatable {
+        /// The target resolves to an existing note — open it.
+        case open(target: String)
+        /// The target has no matching note — offer to create one with this title.
+        case create(title: String)
+    }
 
     /// Returns the wikilink target whose pill encloses `charIndex`, or nil.
-    /// Brackets are excluded — only a click on the link label opens the note.
+    /// Brackets are excluded — only a click on the link label counts.
     public func wikilinkTarget(at charIndex: Int, in text: String) -> String? {
         let ns = text as NSString
         let full = NSRange(location: 0, length: ns.length)
@@ -154,6 +162,13 @@ public final class WikilinkDecorator {
             }
         }
         return result
+    }
+
+    /// Resolve a click at `charIndex` into an action: open the note if it
+    /// exists, otherwise create one. Returns nil if the click isn't on a link.
+    public func clickAction(at charIndex: Int, in text: String) -> ClickAction? {
+        guard let target = wikilinkTarget(at: charIndex, in: text) else { return nil }
+        return isResolved(target) ? .open(target: target) : .create(title: target)
     }
 
     // MARK: - Helpers

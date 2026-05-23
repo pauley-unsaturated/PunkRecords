@@ -142,6 +142,39 @@ final class AppState {
         }
     }
 
+    /// Create a note with a specific title (used by click-to-create on an
+    /// unresolved wikilink). The note's H1 and frontmatter title match `title`
+    /// so future `[[title]]` links resolve to it.
+    func createNote(titled title: String) {
+        guard currentVault != nil, let repo = repository else { return }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let id = DocumentID()
+        let parser = MarkdownParser()
+        let frontmatter = parser.generateFrontmatter(id: id)
+        let content = frontmatter + "\n\n# \(trimmed)\n\n"
+        let baseName = FilenameHelpers.sanitizeFilename(trimmed)
+
+        Task {
+            let path = await FilenameHelpers.uniqueNotePath(baseName: baseName) { candidate in
+                (try? await repo.document(atPath: candidate)) != nil
+            }
+            let doc = Document(id: id, title: trimmed, content: content, path: path)
+            do {
+                try await repo.save(doc)
+            } catch {
+                errorMessage = "Failed to create note: \(error.localizedDescription)"
+                return
+            }
+            session.upsert(doc)
+            if let index = searchIndex {
+                try? await index.index(document: doc)
+            }
+            session.selectedPath = path
+        }
+    }
+
     func renameDocument(_ doc: Document, to newTitle: String) async {
         guard let repo = repository else { return }
         let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
