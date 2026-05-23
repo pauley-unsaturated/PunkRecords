@@ -152,19 +152,26 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
     var onSelectionChanged: ((String?) -> Void)?
     var isWikilinkResolved: ((String) -> Bool)?
     var onOpenWikilink: ((String) -> Void)?
+    var theme: EditorTheme = .dracula
 
     init(
         viewModel: DocumentEditorViewModel,
         onAskAI: ((String) -> Void)? = nil,
         onSelectionChanged: ((String?) -> Void)? = nil,
         isWikilinkResolved: ((String) -> Bool)? = nil,
-        onOpenWikilink: ((String) -> Void)? = nil
+        onOpenWikilink: ((String) -> Void)? = nil,
+        theme: EditorTheme = .dracula
     ) {
         self.viewModel = viewModel
         self.onAskAI = onAskAI
         self.onSelectionChanged = onSelectionChanged
         self.isWikilinkResolved = isWikilinkResolved
         self.onOpenWikilink = onOpenWikilink
+        self.theme = theme
+    }
+
+    private var baseAttributes: [NSAttributedString.Key: Any] {
+        [.font: theme.bodyFont, .foregroundColor: theme.foreground]
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -188,9 +195,10 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         textView.isAutomaticTextReplacementEnabled = false
         textView.usesFindBar = true
         textView.isIncrementalSearchingEnabled = true
-        textView.backgroundColor = .textBackgroundColor
-        textView.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
-        textView.textColor = .textColor
+        textView.backgroundColor = theme.background
+        textView.insertionPointColor = theme.insertionPoint
+        textView.font = theme.bodyFont
+        textView.textColor = theme.foreground
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
@@ -201,10 +209,6 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         scrollView.borderType = .noBorder
         scrollView.documentView = textView
 
-        let baseAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 14, weight: .regular),
-            .foregroundColor: NSColor.textColor,
-        ]
         textView.typingAttributes = baseAttributes
         textView.textStorage?.setAttributedString(
             NSAttributedString(string: viewModel.document.content, attributes: baseAttributes)
@@ -212,13 +216,19 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         textView.delegate = context.coordinator
 
         do {
-            context.coordinator.highlighter = try TreeSitterMarkdownHighlighter(textView: textView)
+            context.coordinator.highlighter = try TreeSitterMarkdownHighlighter(
+                textView: textView,
+                theme: theme.highlighterTheme
+            )
         } catch {
             assertionFailure("Failed to initialize TreeSitterMarkdownHighlighter: \(error)")
         }
-        context.coordinator.decorator = HybridUXDecorator()
+        context.coordinator.decorator = HybridUXDecorator(style: theme.decoratorStyle)
         if let isResolved = isWikilinkResolved {
-            context.coordinator.wikilinkDecorator = WikilinkDecorator(isResolved: isResolved)
+            context.coordinator.wikilinkDecorator = WikilinkDecorator(
+                style: theme.wikilinkStyle,
+                isResolved: isResolved
+            )
         }
         textView.resolveWikilinkTarget = { [weak coordinator = context.coordinator] index in
             guard let coordinator else { return nil }
@@ -246,10 +256,6 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         if !viewModel.isDirty && textView.string != viewModel.document.content {
-            let baseAttributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.monospacedSystemFont(ofSize: 14, weight: .regular),
-                .foregroundColor: NSColor.textColor,
-            ]
             textView.textStorage?.setAttributedString(
                 NSAttributedString(string: viewModel.document.content, attributes: baseAttributes)
             )
