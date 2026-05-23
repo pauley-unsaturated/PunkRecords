@@ -31,6 +31,13 @@ struct RawEditorView: View {
                         },
                         onWikilinkClick: { action in
                             handleWikilinkClick(action)
+                        },
+                        wikilinkCompletions: { query in
+                            QuickOpenMatcher.match(
+                                documents: appState.documents,
+                                query: query,
+                                limit: 8
+                            ).map(\.document.title)
                         }
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -149,6 +156,8 @@ final class PillTextView: NSTextView {
     var resolveWikilinkClick: ((Int) -> WikilinkDecorator.ClickAction?)?
     /// Invoked with the resolved action when a pill is clicked.
     var onWikilinkClick: ((WikilinkDecorator.ClickAction) -> Void)?
+    /// The `[[` completion popover, when one is active. Set by the Coordinator.
+    weak var completionController: WikilinkCompletionController?
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
@@ -157,7 +166,26 @@ final class PillTextView: NSTextView {
             onWikilinkClick?(action)
             return
         }
+        completionController?.hide()
         super.mouseDown(with: event)
+    }
+
+    override func doCommand(by selector: Selector) {
+        if let completion = completionController, completion.isVisible {
+            switch selector {
+            case #selector(moveUp(_:)):
+                completion.moveUp(); return
+            case #selector(moveDown(_:)):
+                completion.moveDown(); return
+            case #selector(insertNewline(_:)), #selector(insertTab(_:)):
+                if completion.acceptSelection() { return }
+            case #selector(cancelOperation(_:)):
+                completion.hide(); return
+            default:
+                break
+            }
+        }
+        super.doCommand(by: selector)
     }
 }
 
@@ -169,6 +197,8 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
     var onSelectionChanged: ((String?) -> Void)?
     var isWikilinkResolved: ((String) -> Bool)?
     var onWikilinkClick: ((WikilinkDecorator.ClickAction) -> Void)?
+    /// Returns candidate note titles for a `[[` autocomplete query, best-first.
+    var wikilinkCompletions: ((String) -> [String])?
     var theme: EditorTheme = .dracula
 
     init(
@@ -177,6 +207,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         onSelectionChanged: ((String?) -> Void)? = nil,
         isWikilinkResolved: ((String) -> Bool)? = nil,
         onWikilinkClick: ((WikilinkDecorator.ClickAction) -> Void)? = nil,
+        wikilinkCompletions: ((String) -> [String])? = nil,
         theme: EditorTheme = .dracula
     ) {
         self.viewModel = viewModel
@@ -184,6 +215,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         self.onSelectionChanged = onSelectionChanged
         self.isWikilinkResolved = isWikilinkResolved
         self.onWikilinkClick = onWikilinkClick
+        self.wikilinkCompletions = wikilinkCompletions
         self.theme = theme
     }
 
@@ -252,6 +284,17 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             return coordinator.wikilinkDecorator?.clickAction(at: index, in: textView.string)
         }
         textView.onWikilinkClick = onWikilinkClick
+
+        // Wikilink autocomplete popover.
+        if let completions = wikilinkCompletions {
+            let controller = WikilinkCompletionController()
+            context.coordinator.completionController = controller
+            context.coordinator.wikilinkCompletions = completions
+            controller.onAccept = { [weak coordinator = context.coordinator] title in
+                coordinator?.acceptWikilinkCompletion(title, in: textView)
+            }
+            textView.completionController = controller
+        }
         context.coordinator.runDecorations(on: textView)
 
         // Re-decorate the newly visible region when the user scrolls — decoration
@@ -295,6 +338,9 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         var highlighter: TreeSitterMarkdownHighlighter?
         var decorator: HybridUXDecorator?
         var wikilinkDecorator: WikilinkDecorator?
+        var completionController: WikilinkCompletionController?
+        var wikilinkCompletions: ((String) -> [String])?
+        private var completionSession: WikilinkAutocomplete.Session?
         private var debounceTask: Task<Void, Never>?
 
         init(viewModel: DocumentEditorViewModel, onAskAI: ((String) -> Void)? = nil) {
@@ -343,6 +389,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
                 onSelectionChanged?(nil)
             }
             runDecorations(on: textView)
+            updateWikilinkCompletion(in: textView)
         }
 
         func textView(_ textView: NSTextView, menu: NSMenu, for event: NSEvent, at charIndex: Int) -> NSMenu? {
@@ -370,6 +417,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             viewModel.updateContent(textView.string)
             runDecorations(on: textView)
             maybeShowSlashMenu(in: textView)
+            updateWikilinkCompletion(in: textView)
 
             debounceTask?.cancel()
             debounceTask = Task {
@@ -439,6 +487,70 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             let caret = ctx.replaceLocation + ctx.command.caretOffset
             textView.setSelectedRange(NSRange(location: caret, length: 0))
             runDecorations(on: textView)
+        }
+
+        // MARK: - Wikilink autocomplete
+
+        /// Show/update/hide the `[[` completion popover based on the caret.
+        private func updateWikilinkCompletion(in textView: NSTextView) {
+            guard let controller = completionController,
+                  let provider = wikilinkCompletions,
+                  !textView.hasMarkedText() else {
+                completionController?.hide()
+                completionSession = nil
+                return
+            }
+            let caret = textView.selectedRange().location
+            guard let session = WikilinkAutocomplete.activeSession(
+                in: textView.string,
+                caretLocation: caret
+            ) else {
+                controller.hide()
+                completionSession = nil
+                return
+            }
+            completionSession = session
+            let titles = provider(session.query)
+            let rect = caretScreenRect(in: textView, at: session.replaceRange.lowerBound)
+            controller.show(titles: titles, at: rect, relativeTo: textView.window)
+        }
+
+        /// Insert `[[title]]` for an accepted completion, replacing the session
+        /// range, then place the caret after the closing brackets.
+        func acceptWikilinkCompletion(_ title: String, in textView: NSTextView) {
+            guard let session = completionSession else { return }
+            let nsRange = NSRange(
+                location: session.replaceRange.lowerBound,
+                length: session.replaceRange.count
+            )
+            let insertion = WikilinkAutocomplete.insertion(for: title)
+            guard textView.shouldChangeText(in: nsRange, replacementString: insertion) else { return }
+            textView.textStorage?.replaceCharacters(in: nsRange, with: insertion)
+            textView.didChangeText()
+            let caret = session.replaceRange.lowerBound + WikilinkAutocomplete.caretOffset(for: title)
+            textView.setSelectedRange(NSRange(location: caret, length: 0))
+            completionSession = nil
+            viewModel.updateContent(textView.string)
+            runDecorations(on: textView)
+        }
+
+        /// Caret rect for `location`, converted to screen coordinates so the
+        /// completion panel can anchor beneath it.
+        private func caretScreenRect(in textView: NSTextView, at location: Int) -> NSRect {
+            guard let layoutManager = textView.layoutManager,
+                  let container = textView.textContainer else {
+                return .zero
+            }
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: NSRange(location: location, length: 0),
+                actualCharacterRange: nil
+            )
+            var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: container)
+            let origin = textView.textContainerOrigin
+            rect.origin.x += origin.x
+            rect.origin.y += origin.y
+            let inWindow = textView.convert(rect, to: nil)
+            return textView.window?.convertToScreen(inWindow) ?? inWindow
         }
     }
 
