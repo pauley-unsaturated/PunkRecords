@@ -23,6 +23,18 @@ struct RawEditorView: View {
                         },
                         onSelectionChanged: { selectedText in
                             appState.selectedText = selectedText
+                        },
+                        isWikilinkResolved: { target in
+                            appState.documents.contains {
+                                $0.title.caseInsensitiveCompare(target) == .orderedSame
+                            }
+                        },
+                        onOpenWikilink: { target in
+                            if let doc = appState.documents.first(where: {
+                                $0.title.caseInsensitiveCompare(target) == .orderedSame
+                            }) {
+                                appState.selectedDocumentPath = doc.path
+                            }
                         }
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -111,24 +123,62 @@ struct RawEditorView: View {
     .frame(width: 700, height: 500)
 }
 
-/// NSViewRepresentable wrapper for NSTextView with tree-sitter syntax highlighting.
+/// NSTextView subclass that opens a wikilink when its pill is clicked,
+/// instead of placing the caret. Falls through to normal click behavior
+/// everywhere else.
+final class PillTextView: NSTextView {
+    /// Maps a character index to a wikilink target, or nil if the index
+    /// isn't inside a rendered pill. Set by the Coordinator.
+    var resolveWikilinkTarget: ((Int) -> String?)?
+    /// Invoked with the target when a pill is clicked.
+    var onOpenWikilink: ((String) -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let index = characterIndexForInsertion(at: point)
+        if let target = resolveWikilinkTarget?(index), !target.isEmpty {
+            onOpenWikilink?(target)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+}
+
+/// NSViewRepresentable wrapper for NSTextView with tree-sitter syntax
+/// highlighting, hybrid-UX decoration, and wikilink/tag pill chips.
 struct EditorTextViewRepresentable: NSViewRepresentable {
     let viewModel: DocumentEditorViewModel
     var onAskAI: ((String) -> Void)?
     var onSelectionChanged: ((String?) -> Void)?
+    var isWikilinkResolved: ((String) -> Bool)?
+    var onOpenWikilink: ((String) -> Void)?
 
-    init(viewModel: DocumentEditorViewModel, onAskAI: ((String) -> Void)? = nil, onSelectionChanged: ((String?) -> Void)? = nil) {
+    init(
+        viewModel: DocumentEditorViewModel,
+        onAskAI: ((String) -> Void)? = nil,
+        onSelectionChanged: ((String?) -> Void)? = nil,
+        isWikilinkResolved: ((String) -> Bool)? = nil,
+        onOpenWikilink: ((String) -> Void)? = nil
+    ) {
         self.viewModel = viewModel
         self.onAskAI = onAskAI
         self.onSelectionChanged = onSelectionChanged
+        self.isWikilinkResolved = isWikilinkResolved
+        self.onOpenWikilink = onOpenWikilink
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSTextView.scrollableTextView()
-        guard let textView = scrollView.documentView as? NSTextView else {
-            return scrollView
-        }
+        // Build an explicit TextKit 1 stack with the pill-drawing layout
+        // manager. Accessing a custom NSLayoutManager keeps us on TK1, which
+        // the editor epic deliberately chose over TK2.
+        let textStorage = NSTextStorage()
+        let layoutManager = WikilinkPillLayoutManager()
+        textStorage.addLayoutManager(layoutManager)
+        let textContainer = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        textContainer.widthTracksTextView = true
+        layoutManager.addTextContainer(textContainer)
 
+        let textView = PillTextView(frame: .zero, textContainer: textContainer)
         textView.isEditable = true
         textView.isSelectable = true
         textView.allowsUndo = true
@@ -141,6 +191,15 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         textView.backgroundColor = .textBackgroundColor
         textView.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
         textView.textColor = .textColor
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.borderType = .noBorder
+        scrollView.documentView = textView
 
         textView.string = viewModel.document.content
         textView.delegate = context.coordinator
@@ -151,7 +210,15 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             assertionFailure("Failed to initialize TreeSitterMarkdownHighlighter: \(error)")
         }
         context.coordinator.decorator = HybridUXDecorator()
-        context.coordinator.decorator?.decorate(textView: textView)
+        if let isResolved = isWikilinkResolved {
+            context.coordinator.wikilinkDecorator = WikilinkDecorator(isResolved: isResolved)
+        }
+        textView.resolveWikilinkTarget = { [weak coordinator = context.coordinator] index in
+            guard let coordinator else { return nil }
+            return coordinator.wikilinkDecorator?.wikilinkTarget(at: index, in: textView.string)
+        }
+        textView.onOpenWikilink = onOpenWikilink
+        context.coordinator.runDecorations(on: textView)
 
         // Make the NSTextView reachable from XCUITest. The wrapping
         // SwiftUI .accessibilityIdentifier modifier lands on a parent
@@ -167,7 +234,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         if !viewModel.isDirty && textView.string != viewModel.document.content {
             textView.string = viewModel.document.content
             context.coordinator.highlighter?.invalidateAll()
-            context.coordinator.decorator?.decorate(textView: textView)
+            context.coordinator.runDecorations(on: textView)
         }
     }
 
@@ -184,11 +251,19 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         var onSelectionChanged: ((String?) -> Void)?
         var highlighter: TreeSitterMarkdownHighlighter?
         var decorator: HybridUXDecorator?
+        var wikilinkDecorator: WikilinkDecorator?
         private var debounceTask: Task<Void, Never>?
 
         init(viewModel: DocumentEditorViewModel, onAskAI: ((String) -> Void)? = nil) {
             self.viewModel = viewModel
             self.onAskAI = onAskAI
+        }
+
+        /// Run the hybrid-UX and wikilink decoration passes in order.
+        /// Wikilink pills go last so they win on any overlapping range.
+        func runDecorations(on textView: NSTextView) {
+            decorator?.decorate(textView: textView)
+            wikilinkDecorator?.decorate(textView: textView)
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
@@ -200,7 +275,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             } else {
                 onSelectionChanged?(nil)
             }
-            decorator?.decorate(textView: textView)
+            runDecorations(on: textView)
         }
 
         func textView(_ textView: NSTextView, menu: NSMenu, for event: NSEvent, at charIndex: Int) -> NSMenu? {
@@ -226,7 +301,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             viewModel.updateContent(textView.string)
-            decorator?.decorate(textView: textView)
+            runDecorations(on: textView)
 
             debounceTask?.cancel()
             debounceTask = Task {
