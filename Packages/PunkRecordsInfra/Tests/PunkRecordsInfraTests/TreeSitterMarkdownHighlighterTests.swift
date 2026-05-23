@@ -81,11 +81,56 @@ struct TreeSitterMarkdownHighlighterTests {
         #expect(provider("inline") != nil)
     }
 
-    @Test("Language provider returns nil for unknown injections")
+    @Test("Language provider returns nil for unsupported injections")
     func languageProviderReturnsNilForUnknown() {
         let provider = TreeSitterMarkdownHighlighter.makeLanguageProvider()
-        #expect(provider("swift") == nil)
-        #expect(provider("python") == nil)
+        #expect(provider("rust") == nil)
+        #expect(provider("haskell") == nil)
+        #expect(provider("") == nil)
+    }
+
+    // MARK: - Injected code grammars
+
+    @Test("Language provider resolves swift/python/javascript fences")
+    func languageProviderResolvesCode() {
+        let provider = TreeSitterMarkdownHighlighter.makeLanguageProvider()
+        #expect(provider("swift") != nil)
+        #expect(provider("python") != nil)
+        #expect(provider("py") != nil)
+        #expect(provider("javascript") != nil)
+        #expect(provider("js") != nil)
+        #expect(provider("JavaScript") != nil) // case-insensitive
+    }
+
+    @Test("Each code grammar config loads its bundled highlight queries")
+    func codeConfigsLoadQueries() throws {
+        let provider = TreeSitterMarkdownHighlighter.makeLanguageProvider()
+        for lang in ["swift", "python", "javascript"] {
+            let config = try #require(provider(lang))
+            #expect(config.queries.keys.isEmpty == false, "\(lang) should bundle highlight queries")
+        }
+    }
+
+    @Test("Code captures map to the theme's code palette by leading component")
+    func codeColorMapping() {
+        let theme = TreeSitterMarkdownHighlighter.Theme(
+            codeColors: ["keyword": .systemPink, "string": .systemYellow]
+        )
+        // Leading component matches.
+        #expect(TreeSitterMarkdownHighlighter.codeColor(for: "keyword", theme: theme) == .systemPink)
+        #expect(TreeSitterMarkdownHighlighter.codeColor(for: "keyword.function", theme: theme) == .systemPink)
+        #expect(TreeSitterMarkdownHighlighter.codeColor(for: "string.special", theme: theme) == .systemYellow)
+        // Recognized code root without a palette entry falls back to codeColor.
+        #expect(TreeSitterMarkdownHighlighter.codeColor(for: "function", theme: theme) == theme.codeColor)
+        // Non-code captures return nil (handled by markdown cases instead).
+        #expect(TreeSitterMarkdownHighlighter.codeColor(for: "nonsense", theme: theme) == nil)
+    }
+
+    @Test("attributes() colors a code keyword via the palette")
+    func codeKeywordAttributes() {
+        let theme = TreeSitterMarkdownHighlighter.Theme(codeColors: ["keyword": .systemPink])
+        let attrs = TreeSitterMarkdownHighlighter.attributes(for: "keyword.function", theme: theme)
+        #expect(attrs[.foregroundColor] as? NSColor == .systemPink)
     }
 
     // MARK: - Integration with NSTextView (smoke test)

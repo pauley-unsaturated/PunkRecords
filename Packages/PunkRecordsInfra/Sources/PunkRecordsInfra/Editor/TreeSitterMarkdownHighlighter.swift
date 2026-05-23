@@ -4,6 +4,9 @@ import Neon
 import SwiftTreeSitter
 import TreeSitterMarkdown
 import TreeSitterMarkdownInline
+import TreeSitterSwift
+import TreeSitterPython
+import TreeSitterJavaScript
 
 /// Live Markdown syntax highlighter backed by tree-sitter via Neon.
 ///
@@ -26,6 +29,11 @@ public final class TreeSitterMarkdownHighlighter {
         public var codeBackground: NSColor
         public var linkColor: NSColor
         public var listMarkerColor: NSColor
+        /// Colors for syntax-highlighted fenced code content, keyed by the
+        /// leading component of a tree-sitter capture (e.g. "keyword", "string",
+        /// "comment", "function", "type", "number"). Missing keys fall back to
+        /// `codeColor`.
+        public var codeColors: [String: NSColor]
 
         public init(
             bodyFont: NSFont = .monospacedSystemFont(ofSize: 14, weight: .regular),
@@ -37,7 +45,8 @@ public final class TreeSitterMarkdownHighlighter {
             codeColor: NSColor = .systemPink,
             codeBackground: NSColor = .quaternaryLabelColor,
             linkColor: NSColor = .linkColor,
-            listMarkerColor: NSColor = .systemYellow
+            listMarkerColor: NSColor = .systemYellow,
+            codeColors: [String: NSColor] = [:]
         ) {
             self.bodyFont = bodyFont
             self.bodyColor = bodyColor
@@ -49,6 +58,7 @@ public final class TreeSitterMarkdownHighlighter {
             self.codeBackground = codeBackground
             self.linkColor = linkColor
             self.listMarkerColor = listMarkerColor
+            self.codeColors = codeColors
         }
 
         public static let `default` = Theme()
@@ -142,10 +152,42 @@ public final class TreeSitterMarkdownHighlighter {
             switch name.lowercased() {
             case "markdown_inline", "markdowninline", "inline":
                 return try? Self.makeInlineConfiguration()
+            case "swift":
+                return try? Self.makeCodeConfiguration(
+                    language: Language(language: tree_sitter_swift()),
+                    name: "Swift",
+                    bundleName: "TreeSitterSwift_TreeSitterSwift"
+                )
+            case "python", "py":
+                return try? Self.makeCodeConfiguration(
+                    language: Language(language: tree_sitter_python()),
+                    name: "Python",
+                    bundleName: "TreeSitterPython_TreeSitterPython"
+                )
+            case "javascript", "js":
+                return try? Self.makeCodeConfiguration(
+                    language: Language(language: tree_sitter_javascript()),
+                    name: "JavaScript",
+                    bundleName: "TreeSitterJavaScript_TreeSitterJavaScript"
+                )
             default:
                 return nil
             }
         }
+    }
+
+    /// Build a `LanguageConfiguration` for an injected code grammar, using the
+    /// bundle-discovery fallback so queries are found under both the app and
+    /// `swift test`.
+    static func makeCodeConfiguration(
+        language: Language,
+        name: String,
+        bundleName: String
+    ) throws -> LanguageConfiguration {
+        if let url = locateQueriesDirectory(named: bundleName) {
+            return try LanguageConfiguration(language, name: name, queriesURL: url)
+        }
+        return try LanguageConfiguration(language, name: name)
     }
 
     static func makeAttributeProvider(theme: Theme) -> TokenAttributeProvider {
@@ -199,7 +241,26 @@ public final class TreeSitterMarkdownHighlighter {
             // Code fence content — leave at body style, no extra attributes.
             return [:]
         default:
+            // Injected-code captures (keyword, string, comment, function, …).
+            // Match on the leading component so "keyword.function" maps like
+            // "keyword". Falls back to codeColor for unmapped code captures.
+            if let color = codeColor(for: tokenName, theme: theme) {
+                return [.foregroundColor: color]
+            }
             return [:]
         }
+    }
+
+    /// Resolve a fenced-code capture name to a color from the theme's code
+    /// palette, or nil if it isn't a recognized code capture.
+    static func codeColor(for tokenName: String, theme: Theme) -> NSColor? {
+        let root = tokenName.split(separator: ".").first.map(String.init) ?? tokenName
+        let codeRoots: Set<String> = [
+            "keyword", "string", "comment", "number", "function", "method",
+            "type", "constant", "variable", "operator", "property",
+            "constructor", "attribute", "tag", "boolean", "escape", "label",
+        ]
+        guard codeRoots.contains(root) else { return nil }
+        return theme.codeColors[root] ?? theme.codeColor
     }
 }

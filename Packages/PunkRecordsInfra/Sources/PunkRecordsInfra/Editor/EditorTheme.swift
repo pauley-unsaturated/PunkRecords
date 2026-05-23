@@ -63,17 +63,37 @@ public struct EditorTheme: @unchecked Sendable {
 
         let bodyFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
 
+        let yellow = NSColor(hex: 0xF1FA8C)
         let highlighter = TreeSitterMarkdownHighlighter.Theme(
             bodyFont: bodyFont,
             bodyColor: foreground,
             dimColor: comment,
             headingColors: [1: purple, 2: purple, 3: purple, 4: purple, 5: purple, 6: purple],
-            emphasisColor: NSColor(hex: 0xF1FA8C), // yellow
+            emphasisColor: yellow,
             strongColor: orange,
             codeColor: green,
             codeBackground: currentLine,
             linkColor: cyan,
-            listMarkerColor: pink
+            listMarkerColor: pink,
+            codeColors: [
+                "keyword": pink,
+                "operator": pink,
+                "string": yellow,
+                "escape": pink,
+                "comment": comment,
+                "number": purple,
+                "boolean": purple,
+                "constant": purple,
+                "function": green,
+                "method": green,
+                "constructor": green,
+                "type": cyan,
+                "attribute": green,
+                "label": cyan,
+                "variable": foreground,
+                "property": foreground,
+                "tag": pink,
+            ]
         )
 
         let decorator = HybridUXDecorator.Style(
