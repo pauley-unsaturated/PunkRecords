@@ -30,6 +30,11 @@ public final class HybridUXDecorator {
         public var blockquoteColor: NSColor
         /// Foreground color for horizontal rule lines.
         public var horizontalRuleColor: NSColor
+        /// Adaptive color filled in for any text the tree-sitter pass left
+        /// without an explicit foreground. Without this, untokenized body text
+        /// falls back to the text view's default render color, which is
+        /// illegible against a dark background.
+        public var bodyColor: NSColor
 
         public init(
             dimColor: NSColor = .tertiaryLabelColor,
@@ -46,7 +51,8 @@ public final class HybridUXDecorator {
             headingWeight: NSFont.Weight = .bold,
             bodyFont: NSFont = .monospacedSystemFont(ofSize: 14, weight: .regular),
             blockquoteColor: NSColor = .systemMint,
-            horizontalRuleColor: NSColor = .separatorColor
+            horizontalRuleColor: NSColor = .separatorColor,
+            bodyColor: NSColor = .textColor
         ) {
             self.dimColor = dimColor
             self.revealColor = revealColor
@@ -56,6 +62,7 @@ public final class HybridUXDecorator {
             self.bodyFont = bodyFont
             self.blockquoteColor = blockquoteColor
             self.horizontalRuleColor = horizontalRuleColor
+            self.bodyColor = bodyColor
         }
 
         public static let `default` = Style()
@@ -85,6 +92,7 @@ public final class HybridUXDecorator {
 
         textStorage.beginEditing()
 
+        fillBodyColor(in: textStorage, scanRange: scanRange)
         applyHeadingSizes(to: textStorage, text: text, in: scanRange)
         applyBlockquoteStyling(to: textStorage, text: text, in: scanRange)
         applyHorizontalRuleStyling(to: textStorage, text: text, in: scanRange)
@@ -97,6 +105,22 @@ public final class HybridUXDecorator {
         )
 
         textStorage.endEditing()
+    }
+
+    /// Give an explicit, adaptive foreground to any sub-range the tree-sitter
+    /// pass left uncolored. Ranges that already carry a foreground (Neon's
+    /// token colors) are left untouched, so this never overrides syntax colors.
+    private func fillBodyColor(in textStorage: NSTextStorage, scanRange: NSRange) {
+        let safe = NSRange(
+            location: scanRange.location,
+            length: min(scanRange.length, textStorage.length - scanRange.location)
+        )
+        guard safe.length > 0 else { return }
+        textStorage.enumerateAttribute(.foregroundColor, in: safe, options: []) { value, range, _ in
+            if value == nil {
+                textStorage.addAttribute(.foregroundColor, value: style.bodyColor, range: range)
+            }
+        }
     }
 
     // MARK: - Heading sizing

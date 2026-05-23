@@ -201,7 +201,14 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         scrollView.borderType = .noBorder
         scrollView.documentView = textView
 
-        textView.string = viewModel.document.content
+        let baseAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 14, weight: .regular),
+            .foregroundColor: NSColor.textColor,
+        ]
+        textView.typingAttributes = baseAttributes
+        textView.textStorage?.setAttributedString(
+            NSAttributedString(string: viewModel.document.content, attributes: baseAttributes)
+        )
         textView.delegate = context.coordinator
 
         do {
@@ -239,7 +246,13 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         if !viewModel.isDirty && textView.string != viewModel.document.content {
-            textView.string = viewModel.document.content
+            let baseAttributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.monospacedSystemFont(ofSize: 14, weight: .regular),
+                .foregroundColor: NSColor.textColor,
+            ]
+            textView.textStorage?.setAttributedString(
+                NSAttributedString(string: viewModel.document.content, attributes: baseAttributes)
+            )
             context.coordinator.highlighter?.invalidateAll()
             context.coordinator.runDecorations(on: textView)
         }

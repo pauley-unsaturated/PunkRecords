@@ -154,6 +154,55 @@ struct HybridUXDecoratorTests {
         #expect(color == style.horizontalRuleColor)
     }
 
+    // MARK: - Body color fill
+
+    @Test("Text with no foreground (as Neon leaves it) gets the body color")
+    func bodyColorFilled() {
+        let textView = NSTextView()
+        textView.string = "Plain paragraph with no markdown tokens."
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        // Simulate Neon resetting the range to default attributes that lack a
+        // foreground color, which is what leaves body text illegible.
+        textView.textStorage?.removeAttribute(
+            .foregroundColor,
+            range: NSRange(location: 0, length: (textView.string as NSString).length)
+        )
+        let style = HybridUXDecorator.Style(bodyColor: .systemTeal)
+        let decorator = HybridUXDecorator(style: style)
+        decorator.decorate(textView: textView)
+
+        let storage = textView.textStorage!
+        let color = storage.attribute(.foregroundColor, at: 5, effectiveRange: nil) as? NSColor
+        #expect(color == NSColor.systemTeal)
+    }
+
+    @Test("Existing syntax colors are not overwritten by the body-color fill")
+    func bodyColorPreservesExistingForeground() {
+        let textView = NSTextView()
+        textView.string = "token here"
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        // Clear the auto-applied foreground, then color only "token" — as if a
+        // tree-sitter token color landed on it and the rest stayed bare.
+        textView.textStorage?.removeAttribute(
+            .foregroundColor,
+            range: NSRange(location: 0, length: (textView.string as NSString).length)
+        )
+        textView.textStorage?.addAttribute(
+            .foregroundColor,
+            value: NSColor.systemPink,
+            range: NSRange(location: 0, length: 5)
+        )
+        let style = HybridUXDecorator.Style(bodyColor: .systemTeal)
+        let decorator = HybridUXDecorator(style: style)
+        decorator.decorate(textView: textView)
+
+        let storage = textView.textStorage!
+        let tokenColor = storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        let bodyFillColor = storage.attribute(.foregroundColor, at: 7, effectiveRange: nil) as? NSColor
+        #expect(tokenColor == NSColor.systemPink, "existing token color must be preserved")
+        #expect(bodyFillColor == NSColor.systemTeal, "uncolored text must get the body color")
+    }
+
     // MARK: - Performance
 
     @Test("Decoration on a large document completes well under a frame budget")
