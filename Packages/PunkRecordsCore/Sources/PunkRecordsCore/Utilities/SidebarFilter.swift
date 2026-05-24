@@ -61,13 +61,28 @@ public enum SidebarFilter {
             }
     }
 
-    /// Substring match against title, case- and diacritic-insensitive.
-    /// Tag and path matches are intentionally excluded here — those belong
-    /// in the deeper FTS5-backed content search, not the navigation filter.
+    /// Match against title (case- and diacritic-insensitive substring), or
+    /// against tags when the query carries a `tag:` prefix.
+    ///
+    /// The `tag:` form powers click-to-filter from `#tag` pills in the editor:
+    /// `tag:swift` keeps only notes tagged `swift`. A bare query still matches
+    /// titles only — broader content/path search lives in the FTS5 index, not
+    /// this navigation filter.
     private static func matches(_ doc: Document, query: String) -> Bool {
-        doc.title.range(
+        if let tag = tagPrefix(in: query) {
+            guard !tag.isEmpty else { return true }
+            return doc.tags.contains { $0.range(of: tag, options: .caseInsensitive) != nil }
+        }
+        return doc.title.range(
             of: query,
             options: [.caseInsensitive, .diacriticInsensitive]
         ) != nil
+    }
+
+    /// Extracts the tag from a `tag:<name>` query, or nil if absent.
+    private static func tagPrefix(in query: String) -> String? {
+        let prefix = "tag:"
+        guard query.lowercased().hasPrefix(prefix) else { return nil }
+        return String(query.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
     }
 }

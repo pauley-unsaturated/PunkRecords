@@ -16,6 +16,11 @@ final class AppState {
     var askAIText: String?
     var selectedText: String?
 
+    /// Sidebar navigation filter. Shared here (rather than local to the sidebar
+    /// view) so the editor can drive it — clicking a `#tag` pill sets it to
+    /// `tag:<name>` to filter the note list. See `SidebarFilter`.
+    var sidebarFilterQuery: String = ""
+
     /// Documents + selection live here. Operations on this state are Core-defined
     /// and exercised by tests directly — AppState just owns the snapshot.
     var session = VaultDocumentsState()
@@ -35,6 +40,13 @@ final class AppState {
 
     /// The currently selected document, resolved from `selectedDocumentPath`.
     var selectedDocument: Document? { session.selectedDocument }
+
+    /// Distinct tags across the vault (lowercased at the Document boundary),
+    /// sorted. Backs `#` autocomplete in the editor.
+    var distinctTags: [String] {
+        Array(Set(documents.flatMap(\.tags)))
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
 
     // Dependencies — initialized lazily when a vault is opened
     private(set) var repository: FileSystemDocumentRepository?

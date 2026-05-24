@@ -171,6 +171,24 @@ public final class WikilinkDecorator {
         return isResolved(target) ? .open(target: target) : .create(title: target)
     }
 
+    /// Returns the tag name (without the leading `#`) whose pill encloses
+    /// `charIndex`, or nil. The whole `#tag` span is hit-testable so a click
+    /// anywhere on the pill — including the `#` — filters by that tag.
+    public func tagTarget(at charIndex: Int, in text: String) -> String? {
+        let ns = text as NSString
+        let full = NSRange(location: 0, length: ns.length)
+        var result: String?
+        Self.tagRegex.enumerateMatches(in: text, range: full) { match, _, stop in
+            guard let match else { return }
+            let whole = match.range
+            if charIndex >= whole.location && charIndex < whole.location + whole.length {
+                result = ns.substring(with: match.range(at: 1))
+                stop.pointee = true
+            }
+        }
+        return result
+    }
+
     // MARK: - Helpers
 
     /// `Foo|alias` -> `Foo`; trims whitespace.

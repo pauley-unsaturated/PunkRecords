@@ -10,15 +10,14 @@ struct VaultBrowserView: View {
     @State private var deleteCandidate: Document?
     @State private var showDeleteDialog = false
 
-    @State private var searchQuery: String = ""
     @FocusState private var isSearchFocused: Bool
 
     private var isFiltering: Bool {
-        !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !appState.sidebarFilterQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var groupedByFolder: [SidebarFolderGroup] {
-        SidebarFilter.filter(documents: appState.documents, query: searchQuery)
+        SidebarFilter.filter(documents: appState.documents, query: appState.sidebarFilterQuery)
     }
 
     var body: some View {
@@ -83,25 +82,26 @@ struct VaultBrowserView: View {
     // MARK: - Search field
 
     private var searchField: some View {
-        HStack(spacing: 6) {
+        @Bindable var appState = appState
+        return HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
                 .imageScale(.small)
-            TextField("Filter", text: $searchQuery)
+            TextField("Filter", text: $appState.sidebarFilterQuery)
                 .textFieldStyle(.plain)
                 .focused($isSearchFocused)
                 .accessibilityIdentifier("sidebarSearchField")
                 .onKeyPress(.escape) {
-                    if searchQuery.isEmpty {
+                    if appState.sidebarFilterQuery.isEmpty {
                         isSearchFocused = false
                     } else {
-                        searchQuery = ""
+                        appState.sidebarFilterQuery = ""
                     }
                     return .handled
                 }
-            if !searchQuery.isEmpty {
+            if !appState.sidebarFilterQuery.isEmpty {
                 Button {
-                    searchQuery = ""
+                    appState.sidebarFilterQuery = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)

@@ -5,12 +5,13 @@ import Foundation
 @Suite("SidebarFilter")
 struct SidebarFilterTests {
 
-    private func doc(_ title: String, path: String) -> Document {
+    private func doc(_ title: String, path: String, tags: [String] = []) -> Document {
         Document(
             id: UUID(),
             title: title,
             content: "",
-            path: path
+            path: path,
+            tags: tags
         )
     }
 
@@ -134,6 +135,35 @@ struct SidebarFilterTests {
         ]
         let groups = SidebarFilter.filter(documents: docs, query: "unicorn")
         #expect(groups.first?.documents.first?.title == "🦄 Unicorn Notes")
+    }
+
+    @Test("tag: prefix filters by tag, not title")
+    func tagPrefixFiltersByTag() {
+        let docs = [
+            doc("Swift Notes", path: "a.md", tags: ["swift", "ios"]),
+            doc("Rust Notes", path: "b.md", tags: ["rust"]),
+            doc("Swift Mention", path: "c.md", tags: []), // title says swift, no tag
+        ]
+        let groups = SidebarFilter.filter(documents: docs, query: "tag:swift")
+        let titles = groups.flatMap(\.documents).map(\.title)
+        #expect(titles == ["Swift Notes"], "Only the tagged note survives, not the title match")
+    }
+
+    @Test("tag: matching is case-insensitive")
+    func tagPrefixCaseInsensitive() {
+        let docs = [doc("A", path: "a.md", tags: ["swift"])]
+        let groups = SidebarFilter.filter(documents: docs, query: "tag:SWIFT")
+        #expect(groups.flatMap(\.documents).count == 1)
+    }
+
+    @Test("Bare tag: with no name returns everything")
+    func emptyTagReturnsAll() {
+        let docs = [
+            doc("A", path: "a.md", tags: ["x"]),
+            doc("B", path: "b.md", tags: []),
+        ]
+        let groups = SidebarFilter.filter(documents: docs, query: "tag:")
+        #expect(groups.flatMap(\.documents).count == 2)
     }
 
     @Test("Filter on 10k docs completes in well under 50ms")

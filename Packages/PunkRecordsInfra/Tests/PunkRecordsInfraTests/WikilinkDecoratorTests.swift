@@ -79,6 +79,38 @@ struct WikilinkDecoratorTests {
         #expect(decorator.wikilinkTarget(at: 5, in: text) == "Target")
     }
 
+    // MARK: - Tag hit testing (click-to-filter)
+
+    @Test("Tag hit test returns the name when index is on the tag")
+    func tagHitInside() {
+        let decorator = WikilinkDecorator(isResolved: { _ in true })
+        let text = "tagged #swift here"
+        // "#swift" spans 7..<13; click on the 's'.
+        #expect(decorator.tagTarget(at: 8, in: text) == "swift")
+    }
+
+    @Test("Tag hit test includes the leading # in the hit region")
+    func tagHitOnHash() {
+        let decorator = WikilinkDecorator(isResolved: { _ in true })
+        let text = "tagged #swift here"
+        #expect(decorator.tagTarget(at: 7, in: text) == "swift")
+    }
+
+    @Test("Tag hit test returns nil off any tag")
+    func tagHitOutside() {
+        let decorator = WikilinkDecorator(isResolved: { _ in true })
+        let text = "tagged #swift here"
+        #expect(decorator.tagTarget(at: 0, in: text) == nil)
+        #expect(decorator.tagTarget(at: 15, in: text) == nil)
+    }
+
+    @Test("Tag hit test handles hierarchical tags")
+    func tagHitHierarchical() {
+        let decorator = WikilinkDecorator(isResolved: { _ in true })
+        let text = "#area/work"
+        #expect(decorator.tagTarget(at: 3, in: text) == "area/work")
+    }
+
     // MARK: - Click action (open vs create)
 
     @Test("Click on a resolved link yields .open")

@@ -38,6 +38,16 @@ struct RawEditorView: View {
                                 query: query,
                                 limit: 8
                             ).map(\.document.title)
+                        },
+                        tagCompletions: { query in
+                            TagAutocomplete.suggestions(
+                                matching: query,
+                                in: appState.distinctTags,
+                                limit: 8
+                            )
+                        },
+                        onTagClick: { tag in
+                            appState.sidebarFilterQuery = "tag:\(tag)"
                         }
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -156,6 +166,11 @@ final class PillTextView: NSTextView {
     var resolveWikilinkClick: ((Int) -> WikilinkDecorator.ClickAction?)?
     /// Invoked with the resolved action when a pill is clicked.
     var onWikilinkClick: ((WikilinkDecorator.ClickAction) -> Void)?
+    /// Resolves a character index to a `#tag` name, or nil if the index isn't
+    /// inside a rendered tag pill. Set by the Coordinator.
+    var resolveTagClick: ((Int) -> String?)?
+    /// Invoked with the tag name when a tag pill is clicked.
+    var onTagClick: ((String) -> Void)?
     /// The `[[` completion popover, when one is active. Set by the Coordinator.
     weak var completionController: WikilinkCompletionController?
 
@@ -164,6 +179,10 @@ final class PillTextView: NSTextView {
         let index = characterIndexForInsertion(at: point)
         if let action = resolveWikilinkClick?(index) {
             onWikilinkClick?(action)
+            return
+        }
+        if let tag = resolveTagClick?(index) {
+            onTagClick?(tag)
             return
         }
         completionController?.hide()
@@ -199,6 +218,10 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
     var onWikilinkClick: ((WikilinkDecorator.ClickAction) -> Void)?
     /// Returns candidate note titles for a `[[` autocomplete query, best-first.
     var wikilinkCompletions: ((String) -> [String])?
+    /// Returns candidate tag names for a `#` autocomplete query, best-first.
+    var tagCompletions: ((String) -> [String])?
+    /// Invoked with a tag name when a `#tag` pill is clicked (click-to-filter).
+    var onTagClick: ((String) -> Void)?
     var theme: EditorTheme = .dracula
 
     init(
@@ -208,6 +231,8 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         isWikilinkResolved: ((String) -> Bool)? = nil,
         onWikilinkClick: ((WikilinkDecorator.ClickAction) -> Void)? = nil,
         wikilinkCompletions: ((String) -> [String])? = nil,
+        tagCompletions: ((String) -> [String])? = nil,
+        onTagClick: ((String) -> Void)? = nil,
         theme: EditorTheme = .dracula
     ) {
         self.viewModel = viewModel
@@ -216,6 +241,8 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         self.isWikilinkResolved = isWikilinkResolved
         self.onWikilinkClick = onWikilinkClick
         self.wikilinkCompletions = wikilinkCompletions
+        self.tagCompletions = tagCompletions
+        self.onTagClick = onTagClick
         self.theme = theme
     }
 
@@ -284,14 +311,20 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             return coordinator.wikilinkDecorator?.clickAction(at: index, in: textView.string)
         }
         textView.onWikilinkClick = onWikilinkClick
+        textView.resolveTagClick = { [weak coordinator = context.coordinator] index in
+            guard let coordinator else { return nil }
+            return coordinator.wikilinkDecorator?.tagTarget(at: index, in: textView.string)
+        }
+        textView.onTagClick = onTagClick
 
-        // Wikilink autocomplete popover.
-        if let completions = wikilinkCompletions {
+        // Autocomplete popover, shared by `[[` wikilinks and `#` tags.
+        if wikilinkCompletions != nil || tagCompletions != nil {
             let controller = WikilinkCompletionController()
             context.coordinator.completionController = controller
-            context.coordinator.wikilinkCompletions = completions
+            context.coordinator.wikilinkCompletions = wikilinkCompletions
+            context.coordinator.tagCompletions = tagCompletions
             controller.onAccept = { [weak coordinator = context.coordinator] title in
-                coordinator?.acceptWikilinkCompletion(title, in: textView)
+                coordinator?.acceptCompletion(title, in: textView)
             }
             textView.completionController = controller
         }
@@ -340,7 +373,14 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         var wikilinkDecorator: WikilinkDecorator?
         var completionController: WikilinkCompletionController?
         var wikilinkCompletions: ((String) -> [String])?
-        private var completionSession: WikilinkAutocomplete.Session?
+        var tagCompletions: ((String) -> [String])?
+        /// The active autocomplete session, tagged by trigger kind so the
+        /// accepted title is inserted with the right syntax.
+        private enum CompletionSession {
+            case wikilink(WikilinkAutocomplete.Session)
+            case tag(TagAutocomplete.Session)
+        }
+        private var completionSession: CompletionSession?
         private var debounceTask: Task<Void, Never>?
 
         init(viewModel: DocumentEditorViewModel, onAskAI: ((String) -> Void)? = nil) {
@@ -389,7 +429,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
                 onSelectionChanged?(nil)
             }
             runDecorations(on: textView)
-            updateWikilinkCompletion(in: textView)
+            updateCompletion(in: textView)
         }
 
         func textView(_ textView: NSTextView, menu: NSMenu, for event: NSEvent, at charIndex: Int) -> NSMenu? {
@@ -417,7 +457,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             viewModel.updateContent(textView.string)
             runDecorations(on: textView)
             maybeShowSlashMenu(in: textView)
-            updateWikilinkCompletion(in: textView)
+            updateCompletion(in: textView)
 
             debounceTask?.cancel()
             debounceTask = Task {
@@ -489,46 +529,63 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             runDecorations(on: textView)
         }
 
-        // MARK: - Wikilink autocomplete
+        // MARK: - Autocomplete (`[[` wikilinks and `#` tags)
 
-        /// Show/update/hide the `[[` completion popover based on the caret.
-        private func updateWikilinkCompletion(in textView: NSTextView) {
-            guard let controller = completionController,
-                  let provider = wikilinkCompletions,
-                  !textView.hasMarkedText() else {
+        /// Show/update/hide the completion popover based on the caret. A `[[`
+        /// wikilink session takes precedence over a `#` tag session when both
+        /// would somehow match, since `[[` is the more specific trigger.
+        private func updateCompletion(in textView: NSTextView) {
+            guard let controller = completionController, !textView.hasMarkedText() else {
                 completionController?.hide()
                 completionSession = nil
                 return
             }
             let caret = textView.selectedRange().location
-            guard let session = WikilinkAutocomplete.activeSession(
-                in: textView.string,
-                caretLocation: caret
-            ) else {
-                controller.hide()
-                completionSession = nil
+            let text = textView.string
+
+            if let provider = wikilinkCompletions,
+               let session = WikilinkAutocomplete.activeSession(in: text, caretLocation: caret) {
+                completionSession = .wikilink(session)
+                show(provider(session.query), anchoredAt: session.replaceRange.lowerBound, in: textView, controller: controller)
                 return
             }
-            completionSession = session
-            let titles = provider(session.query)
-            let rect = caretScreenRect(in: textView, at: session.replaceRange.lowerBound)
+            if let provider = tagCompletions,
+               let session = TagAutocomplete.activeSession(in: text, caretLocation: caret) {
+                completionSession = .tag(session)
+                show(provider(session.query), anchoredAt: session.replaceRange.lowerBound, in: textView, controller: controller)
+                return
+            }
+            controller.hide()
+            completionSession = nil
+        }
+
+        private func show(_ titles: [String], anchoredAt location: Int, in textView: NSTextView, controller: WikilinkCompletionController) {
+            let rect = caretScreenRect(in: textView, at: location)
             controller.show(titles: titles, at: rect, relativeTo: textView.window)
         }
 
-        /// Insert `[[title]]` for an accepted completion, replacing the session
-        /// range, then place the caret after the closing brackets.
-        func acceptWikilinkCompletion(_ title: String, in textView: NSTextView) {
+        /// Insert the accepted completion with its trigger's syntax (`[[title]]`
+        /// or `#tag `), replacing the session range, then position the caret.
+        func acceptCompletion(_ title: String, in textView: NSTextView) {
             guard let session = completionSession else { return }
-            let nsRange = NSRange(
-                location: session.replaceRange.lowerBound,
-                length: session.replaceRange.count
-            )
-            let insertion = WikilinkAutocomplete.insertion(for: title)
+            let replaceRange: Range<Int>
+            let insertion: String
+            let caretOffset: Int
+            switch session {
+            case .wikilink(let s):
+                replaceRange = s.replaceRange
+                insertion = WikilinkAutocomplete.insertion(for: title)
+                caretOffset = WikilinkAutocomplete.caretOffset(for: title)
+            case .tag(let s):
+                replaceRange = s.replaceRange
+                insertion = TagAutocomplete.insertion(for: title)
+                caretOffset = TagAutocomplete.caretOffset(for: title)
+            }
+            let nsRange = NSRange(location: replaceRange.lowerBound, length: replaceRange.count)
             guard textView.shouldChangeText(in: nsRange, replacementString: insertion) else { return }
             textView.textStorage?.replaceCharacters(in: nsRange, with: insertion)
             textView.didChangeText()
-            let caret = session.replaceRange.lowerBound + WikilinkAutocomplete.caretOffset(for: title)
-            textView.setSelectedRange(NSRange(location: caret, length: 0))
+            textView.setSelectedRange(NSRange(location: replaceRange.lowerBound + caretOffset, length: 0))
             completionSession = nil
             viewModel.updateContent(textView.string)
             runDecorations(on: textView)
