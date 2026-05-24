@@ -32,6 +32,10 @@ let package = Package(
         .package(url: "https://github.com/tree-sitter/tree-sitter-c.git", exact: "0.23.6"),
         .package(url: "https://github.com/tree-sitter/tree-sitter-cpp.git", exact: "0.23.4"),
         .package(url: "https://github.com/tree-sitter/tree-sitter-typescript.git", exact: "0.23.2"),
+        .package(url: "https://github.com/tree-sitter/tree-sitter-bash.git", exact: "0.23.3"),
+        // 0.24.3 is the last json tag that ships a Package.swift — SPM support
+        // was dropped in 0.24.4+. Its highlight query is self-contained.
+        .package(url: "https://github.com/tree-sitter/tree-sitter-json.git", exact: "0.24.3"),
     ],
     targets: [
         .target(
@@ -50,6 +54,8 @@ let package = Package(
                 .product(name: "TreeSitterC", package: "tree-sitter-c"),
                 .product(name: "TreeSitterCPP", package: "tree-sitter-cpp"),
                 .product(name: "TreeSitterTypeScript", package: "tree-sitter-typescript"),
+                .product(name: "TreeSitterBash", package: "tree-sitter-bash"),
+                .product(name: "TreeSitterJSON", package: "tree-sitter-json"),
             ]
         ),
         .testTarget(

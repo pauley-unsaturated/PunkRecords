@@ -103,7 +103,7 @@ struct TreeSitterMarkdownHighlighterTests {
         #expect(provider("JavaScript") != nil) // case-insensitive
     }
 
-    @Test("Language provider resolves typescript/rust/c/cpp fences and aliases")
+    @Test("Language provider resolves typescript/rust/c/cpp/bash/json fences and aliases")
     func languageProviderResolvesAddedCode() {
         let provider = TreeSitterMarkdownHighlighter.makeLanguageProvider()
         #expect(provider("typescript") != nil)
@@ -114,12 +114,15 @@ struct TreeSitterMarkdownHighlighterTests {
         #expect(provider("cpp") != nil)
         #expect(provider("c++") != nil)
         #expect(provider("CPP") != nil) // case-insensitive
+        #expect(provider("bash") != nil)
+        #expect(provider("sh") != nil)
+        #expect(provider("json") != nil)
     }
 
     @Test("Each code grammar config loads its bundled highlight queries")
     func codeConfigsLoadQueries() throws {
         let provider = TreeSitterMarkdownHighlighter.makeLanguageProvider()
-        for lang in ["swift", "python", "javascript", "rust", "c", "typescript", "cpp"] {
+        for lang in ["swift", "python", "javascript", "rust", "c", "typescript", "cpp", "bash", "json"] {
             let config = try #require(provider(lang), "\(lang) should resolve")
             #expect(config.queries.keys.isEmpty == false, "\(lang) should bundle highlight queries")
         }

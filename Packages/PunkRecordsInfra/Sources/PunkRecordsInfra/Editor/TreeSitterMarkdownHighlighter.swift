@@ -11,6 +11,8 @@ import TreeSitterRust
 import TreeSitterC
 import TreeSitterCPP
 import TreeSitterTypeScript
+import TreeSitterBash
+import TreeSitterJSON
 
 /// Live Markdown syntax highlighter backed by tree-sitter via Neon.
 ///
@@ -188,6 +190,18 @@ public final class TreeSitterMarkdownHighlighter {
                     language: Language(language: tree_sitter_rust()),
                     name: "Rust",
                     bundleName: "TreeSitterRust_TreeSitterRust"
+                )
+            case "bash", "sh", "shell", "zsh":
+                return try? Self.makeCodeConfiguration(
+                    language: Language(language: tree_sitter_bash()),
+                    name: "Bash",
+                    bundleName: "TreeSitterBash_TreeSitterBash"
+                )
+            case "json", "jsonc":
+                return try? Self.makeCodeConfiguration(
+                    language: Language(language: tree_sitter_json()),
+                    name: "JSON",
+                    bundleName: "TreeSitterJSON_TreeSitterJSON"
                 )
             case "c", "h":
                 return try? Self.makeCodeConfiguration(
