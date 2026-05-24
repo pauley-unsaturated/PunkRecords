@@ -7,6 +7,10 @@ import TreeSitterMarkdownInline
 import TreeSitterSwift
 import TreeSitterPython
 import TreeSitterJavaScript
+import TreeSitterRust
+import TreeSitterC
+import TreeSitterCPP
+import TreeSitterTypeScript
 
 /// Live Markdown syntax highlighter backed by tree-sitter via Neon.
 ///
@@ -164,16 +168,96 @@ public final class TreeSitterMarkdownHighlighter {
                     name: "Python",
                     bundleName: "TreeSitterPython_TreeSitterPython"
                 )
-            case "javascript", "js":
+            case "javascript", "js", "jsx", "mjs", "cjs":
                 return try? Self.makeCodeConfiguration(
                     language: Language(language: tree_sitter_javascript()),
                     name: "JavaScript",
                     bundleName: "TreeSitterJavaScript_TreeSitterJavaScript"
                 )
+            case "typescript", "ts", "mts", "cts":
+                // TypeScript's highlights.scm carries only TS-specific rules and
+                // inherits the rest from JavaScript, so concatenate both.
+                return try? Self.makeInheritedCodeConfiguration(
+                    language: Language(language: tree_sitter_typescript()),
+                    name: "TypeScript",
+                    childBundle: "TreeSitterTypeScript_TreeSitterTypeScript",
+                    parentBundle: "TreeSitterJavaScript_TreeSitterJavaScript"
+                )
+            case "rust", "rs":
+                return try? Self.makeCodeConfiguration(
+                    language: Language(language: tree_sitter_rust()),
+                    name: "Rust",
+                    bundleName: "TreeSitterRust_TreeSitterRust"
+                )
+            case "c", "h":
+                return try? Self.makeCodeConfiguration(
+                    language: Language(language: tree_sitter_c()),
+                    name: "C",
+                    bundleName: "TreeSitterC_TreeSitterC"
+                )
+            case "cpp", "c++", "cc", "cxx", "hpp", "hxx", "h++", "hh":
+                // C++ inherits its base highlights from C (comments, numbers,
+                // plain strings, preprocessor); concatenate both queries.
+                return try? Self.makeInheritedCodeConfiguration(
+                    language: Language(language: tree_sitter_cpp()),
+                    name: "C++",
+                    childBundle: "TreeSitterCPP_TreeSitterCPP",
+                    parentBundle: "TreeSitterC_TreeSitterC"
+                )
             default:
                 return nil
             }
         }
+    }
+
+    /// Build a configuration for a grammar whose `highlights.scm` only carries
+    /// rules layered on top of a parent grammar (e.g. TypeScript over
+    /// JavaScript, C++ over C). The official tree-sitter repos keep these
+    /// queries split and rely on the nvim-treesitter `inherits` convention,
+    /// which SwiftTreeSitter does not implement — so we concatenate the parent
+    /// and child highlight queries ourselves (parent first, child appended so
+    /// its patterns win) and compile them against the child language.
+    ///
+    /// Compiling the parent query against the child grammar is safe because the
+    /// child grammar is a superset of the parent's node types. If the combined
+    /// query fails to compile for any reason, falls back to the child's own
+    /// queries so highlighting degrades gracefully instead of vanishing.
+    static func makeInheritedCodeConfiguration(
+        language: Language,
+        name: String,
+        childBundle: String,
+        parentBundle: String
+    ) throws -> LanguageConfiguration {
+        guard let childURL = locateQueriesDirectory(named: childBundle) else {
+            return try makeCodeConfiguration(language: language, name: name, bundleName: childBundle)
+        }
+
+        func read(_ url: URL?, _ file: String) -> String {
+            guard let url else { return "" }
+            return (try? String(contentsOf: url.appendingPathComponent(file), encoding: .utf8)) ?? ""
+        }
+
+        let parentURL = locateQueriesDirectory(named: parentBundle)
+        let combined = read(parentURL, "highlights.scm") + "\n" + read(childURL, "highlights.scm")
+
+        var queries: [Query.Definition: Query] = [:]
+        if let data = combined.data(using: .utf8), let query = try? Query(language: language, data: data) {
+            queries[.highlights] = query
+        }
+        // Injections / locals come from the child grammar only.
+        if let data = try? Data(contentsOf: childURL.appendingPathComponent("injections.scm")),
+           let query = try? Query(language: language, data: data) {
+            queries[.injections] = query
+        }
+        if let data = try? Data(contentsOf: childURL.appendingPathComponent("locals.scm")),
+           let query = try? Query(language: language, data: data) {
+            queries[.locals] = query
+        }
+
+        guard queries[.highlights] != nil else {
+            return try makeCodeConfiguration(language: language, name: name, bundleName: childBundle)
+        }
+        return LanguageConfiguration(language, name: name, queries: queries)
     }
 
     /// Build a `LanguageConfiguration` for an injected code grammar, using the
@@ -188,6 +272,15 @@ public final class TreeSitterMarkdownHighlighter {
             return try LanguageConfiguration(language, name: name, queriesURL: url)
         }
         return try LanguageConfiguration(language, name: name)
+    }
+
+    /// Test seam: the capture names in the highlights query for a fenced-code
+    /// language, or nil if it doesn't resolve. Lets tests confirm that an
+    /// inherited grammar (TypeScript, C++) actually merged its parent's rules.
+    static func highlightsCaptureNames(forFence name: String) -> [String]? {
+        guard let config = makeLanguageProvider()(name),
+              let highlights = config.queries[.highlights] else { return nil }
+        return (0..<highlights.captureCount).compactMap { highlights.captureName(for: $0) }
     }
 
     static func makeAttributeProvider(theme: Theme) -> TokenAttributeProvider {

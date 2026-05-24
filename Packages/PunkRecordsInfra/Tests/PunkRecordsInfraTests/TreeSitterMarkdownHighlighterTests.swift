@@ -84,8 +84,9 @@ struct TreeSitterMarkdownHighlighterTests {
     @Test("Language provider returns nil for unsupported injections")
     func languageProviderReturnsNilForUnknown() {
         let provider = TreeSitterMarkdownHighlighter.makeLanguageProvider()
-        #expect(provider("rust") == nil)
         #expect(provider("haskell") == nil)
+        #expect(provider("ruby") == nil)
+        #expect(provider("go") == nil)
         #expect(provider("") == nil)
     }
 
@@ -102,13 +103,42 @@ struct TreeSitterMarkdownHighlighterTests {
         #expect(provider("JavaScript") != nil) // case-insensitive
     }
 
+    @Test("Language provider resolves typescript/rust/c/cpp fences and aliases")
+    func languageProviderResolvesAddedCode() {
+        let provider = TreeSitterMarkdownHighlighter.makeLanguageProvider()
+        #expect(provider("typescript") != nil)
+        #expect(provider("ts") != nil)
+        #expect(provider("rust") != nil)
+        #expect(provider("rs") != nil)
+        #expect(provider("c") != nil)
+        #expect(provider("cpp") != nil)
+        #expect(provider("c++") != nil)
+        #expect(provider("CPP") != nil) // case-insensitive
+    }
+
     @Test("Each code grammar config loads its bundled highlight queries")
     func codeConfigsLoadQueries() throws {
         let provider = TreeSitterMarkdownHighlighter.makeLanguageProvider()
-        for lang in ["swift", "python", "javascript"] {
-            let config = try #require(provider(lang))
+        for lang in ["swift", "python", "javascript", "rust", "c", "typescript", "cpp"] {
+            let config = try #require(provider(lang), "\(lang) should resolve")
             #expect(config.queries.keys.isEmpty == false, "\(lang) should bundle highlight queries")
         }
+    }
+
+    @Test("Inherited TypeScript query merges JavaScript base rules (comment, string)")
+    func typescriptMergesJavaScriptRules() throws {
+        // TS-only highlights.scm carries no "comment"/"string" rules — they come
+        // from the JavaScript parent. Their presence proves the merge worked.
+        let names = try #require(TreeSitterMarkdownHighlighter.highlightsCaptureNames(forFence: "typescript"))
+        #expect(names.contains("comment"))
+        #expect(names.contains("string"))
+        #expect(names.contains("type")) // and the TS-specific additions too
+    }
+
+    @Test("Inherited C++ query merges C base rules (comment)")
+    func cppMergesCRules() throws {
+        let names = try #require(TreeSitterMarkdownHighlighter.highlightsCaptureNames(forFence: "cpp"))
+        #expect(names.contains("comment"))
     }
 
     @Test("Code captures map to the theme's code palette by leading component")

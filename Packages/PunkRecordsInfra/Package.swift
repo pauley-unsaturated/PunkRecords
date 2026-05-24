@@ -24,6 +24,14 @@ let package = Package(
         // undefined `*_external_scanner_*` symbols at link time).
         .package(url: "https://github.com/tree-sitter/tree-sitter-python.git", exact: "0.23.6"),
         .package(url: "https://github.com/tree-sitter/tree-sitter-javascript.git", exact: "0.23.1"),
+        // Same tagged-release rule as above: each lists src/scanner.c (where it
+        // has one) and depends on ChimeHQ/SwiftTreeSitter, so no duplicate
+        // SwiftTreeSitter product enters the graph. TypeScript ships both the
+        // TypeScript and TSX grammars from one package.
+        .package(url: "https://github.com/tree-sitter/tree-sitter-rust.git", exact: "0.24.0"),
+        .package(url: "https://github.com/tree-sitter/tree-sitter-c.git", exact: "0.23.6"),
+        .package(url: "https://github.com/tree-sitter/tree-sitter-cpp.git", exact: "0.23.4"),
+        .package(url: "https://github.com/tree-sitter/tree-sitter-typescript.git", exact: "0.23.2"),
     ],
     targets: [
         .target(
@@ -38,6 +46,10 @@ let package = Package(
                 .product(name: "TreeSitterSwift", package: "tree-sitter-swift"),
                 .product(name: "TreeSitterPython", package: "tree-sitter-python"),
                 .product(name: "TreeSitterJavaScript", package: "tree-sitter-javascript"),
+                .product(name: "TreeSitterRust", package: "tree-sitter-rust"),
+                .product(name: "TreeSitterC", package: "tree-sitter-c"),
+                .product(name: "TreeSitterCPP", package: "tree-sitter-cpp"),
+                .product(name: "TreeSitterTypeScript", package: "tree-sitter-typescript"),
             ]
         ),
         .testTarget(
