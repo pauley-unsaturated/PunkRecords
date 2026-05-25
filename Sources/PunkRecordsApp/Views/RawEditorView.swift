@@ -8,6 +8,7 @@ struct RawEditorView: View {
     @Environment(AppState.self) private var appState
     @State private var viewModel: DocumentEditorViewModel?
     @State private var isPreviewing = false
+    @AppStorage("editor.emacsKeybindings") private var emacsKeybindings = false
 
     var body: some View {
         Group {
@@ -52,7 +53,8 @@ struct RawEditorView: View {
                         },
                         onTagClick: { tag in
                             appState.sidebarFilterQuery = "tag:\(tag)"
-                        }
+                        },
+                        emacsEnabled: emacsKeybindings
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -170,57 +172,6 @@ struct RawEditorView: View {
     .frame(width: 700, height: 500)
 }
 
-/// NSTextView subclass that opens a wikilink when its pill is clicked,
-/// instead of placing the caret. Falls through to normal click behavior
-/// everywhere else.
-final class PillTextView: NSTextView {
-    /// Resolves a character index to a wikilink click action, or nil if the
-    /// index isn't inside a rendered pill. Set by the Coordinator.
-    var resolveWikilinkClick: ((Int) -> WikilinkDecorator.ClickAction?)?
-    /// Invoked with the resolved action when a pill is clicked.
-    var onWikilinkClick: ((WikilinkDecorator.ClickAction) -> Void)?
-    /// Resolves a character index to a `#tag` name, or nil if the index isn't
-    /// inside a rendered tag pill. Set by the Coordinator.
-    var resolveTagClick: ((Int) -> String?)?
-    /// Invoked with the tag name when a tag pill is clicked.
-    var onTagClick: ((String) -> Void)?
-    /// The `[[` completion popover, when one is active. Set by the Coordinator.
-    weak var completionController: WikilinkCompletionController?
-
-    override func mouseDown(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        let index = characterIndexForInsertion(at: point)
-        if let action = resolveWikilinkClick?(index) {
-            onWikilinkClick?(action)
-            return
-        }
-        if let tag = resolveTagClick?(index) {
-            onTagClick?(tag)
-            return
-        }
-        completionController?.hide()
-        super.mouseDown(with: event)
-    }
-
-    override func doCommand(by selector: Selector) {
-        if let completion = completionController, completion.isVisible {
-            switch selector {
-            case #selector(moveUp(_:)):
-                completion.moveUp(); return
-            case #selector(moveDown(_:)):
-                completion.moveDown(); return
-            case #selector(insertNewline(_:)), #selector(insertTab(_:)):
-                if completion.acceptSelection() { return }
-            case #selector(cancelOperation(_:)):
-                completion.hide(); return
-            default:
-                break
-            }
-        }
-        super.doCommand(by: selector)
-    }
-}
-
 /// NSViewRepresentable wrapper for NSTextView with tree-sitter syntax
 /// highlighting, hybrid-UX decoration, and wikilink/tag pill chips.
 struct EditorTextViewRepresentable: NSViewRepresentable {
@@ -235,6 +186,8 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
     var tagCompletions: ((String) -> [String])?
     /// Invoked with a tag name when a `#tag` pill is clicked (click-to-filter).
     var onTagClick: ((String) -> Void)?
+    /// Whether Emacs keybindings are active in the editor.
+    var emacsEnabled: Bool = false
     var theme: EditorTheme = .dracula
 
     init(
@@ -246,6 +199,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         wikilinkCompletions: ((String) -> [String])? = nil,
         tagCompletions: ((String) -> [String])? = nil,
         onTagClick: ((String) -> Void)? = nil,
+        emacsEnabled: Bool = false,
         theme: EditorTheme = .dracula
     ) {
         self.viewModel = viewModel
@@ -256,6 +210,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         self.wikilinkCompletions = wikilinkCompletions
         self.tagCompletions = tagCompletions
         self.onTagClick = onTagClick
+        self.emacsEnabled = emacsEnabled
         self.theme = theme
     }
 
@@ -341,6 +296,16 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             }
             textView.completionController = controller
         }
+
+        // Emacs keybinding dispatch.
+        context.coordinator.emacsEnabled = emacsEnabled
+        textView.isEmacsEnabled = { [weak coordinator = context.coordinator] in
+            coordinator?.emacsEnabled ?? false
+        }
+        textView.performEmacsCommand = { [weak coordinator = context.coordinator] command in
+            coordinator?.performEmacsCommand(command, in: textView) ?? false
+        }
+
         context.coordinator.runDecorations(on: textView)
 
         // Re-decorate the newly visible region when the user scrolls — decoration
@@ -361,6 +326,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
+        context.coordinator.emacsEnabled = emacsEnabled
         if !viewModel.isDirty && textView.string != viewModel.document.content {
             textView.textStorage?.setAttributedString(
                 NSAttributedString(string: viewModel.document.content, attributes: baseAttributes)
@@ -395,10 +361,36 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         }
         private var completionSession: CompletionSession?
         private var debounceTask: Task<Void, Never>?
+        /// Whether Emacs keybindings are active; mirrored from the @AppStorage
+        /// setting on every SwiftUI update.
+        var emacsEnabled = false
 
         init(viewModel: DocumentEditorViewModel, onAskAI: ((String) -> Void)? = nil) {
             self.viewModel = viewModel
             self.onAskAI = onAskAI
+        }
+
+        // MARK: - Emacs command dispatch
+
+        /// Execute a resolved Emacs command. Returns true when the command is
+        /// consumed (so the key event is not passed on for default handling).
+        ///
+        /// This task wires the dispatch path and implements `keyboardQuit`;
+        /// motions, the mark/kill-ring, and editing commands land in the
+        /// sibling tasks. Recognized-but-not-yet-implemented commands are
+        /// consumed (no-op) so Meta/Control chords don't insert stray
+        /// characters (e.g. Option-d → ∂) in the interim.
+        func performEmacsCommand(_ command: EmacsCommand, in textView: NSTextView) -> Bool {
+            switch command {
+            case .keyboardQuit:
+                // Collapse any selection to its caret. Mark-state clearing is
+                // layered on in the kill-ring task.
+                let range = textView.selectedRange()
+                textView.setSelectedRange(NSRange(location: range.location + range.length, length: 0))
+                return true
+            default:
+                return true
+            }
         }
 
         private var scrollObserver: NSObjectProtocol?

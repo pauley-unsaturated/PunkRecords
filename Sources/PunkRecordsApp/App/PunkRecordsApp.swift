@@ -6,6 +6,7 @@ import PunkRecordsCore
 struct PunkRecordsApp: App {
     @State private var recentsStore = RecentVaultsStore()
     @Environment(\.openWindow) private var openWindow
+    @AppStorage("editor.emacsKeybindings") private var emacsKeybindings = false
 
     private var isUITesting: Bool {
         ProcessInfo.processInfo.arguments.contains("--ui-testing")
@@ -64,6 +65,9 @@ struct PunkRecordsApp: App {
                     NotificationCenter.default.post(name: .vaultWindowFindInVault, object: nil)
                 }
                 .keyboardShortcut("f", modifiers: [.command, .option, .shift])
+            }
+            CommandMenu("Editor") {
+                Toggle("Emacs Keybindings", isOn: $emacsKeybindings)
             }
         }
 
