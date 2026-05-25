@@ -365,52 +365,18 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         /// setting on every SwiftUI update.
         var emacsEnabled = false
 
+        // Emacs mark / kill-ring / yank state. Internal (not private) so the
+        // dispatch logic in EditorCoordinator+Emacs.swift can reach it.
+        var emacsMark: Int?
+        var killRing = EmacsKillRing()
+        var lastYankRange: NSRange?
+        /// True while an Emacs command is mutating the text, so `textDidChange`
+        /// doesn't clear mark/yank state mid-operation (only user edits should).
+        var isPerformingEmacsEdit = false
+
         init(viewModel: DocumentEditorViewModel, onAskAI: ((String) -> Void)? = nil) {
             self.viewModel = viewModel
             self.onAskAI = onAskAI
-        }
-
-        // MARK: - Emacs command dispatch
-
-        /// Execute a resolved Emacs command. Returns true when the command is
-        /// consumed (so the key event is not passed on for default handling).
-        ///
-        /// This task wires the dispatch path and implements `keyboardQuit`;
-        /// motions, the mark/kill-ring, and editing commands land in the
-        /// sibling tasks. Recognized-but-not-yet-implemented commands are
-        /// consumed (no-op) so Meta/Control chords don't insert stray
-        /// characters (e.g. Option-d → ∂) in the interim.
-        func performEmacsCommand(_ command: EmacsCommand, in textView: NSTextView) -> Bool {
-            let caret = textView.selectedRange().location
-            switch command {
-            case .forwardWord, .backwardWord, .forwardSentence, .backwardSentence,
-                 .forwardParagraph, .backwardParagraph, .beginningOfBuffer, .endOfBuffer:
-                if let dest = EmacsMotion.caretDestination(for: command, in: textView.string, caret: caret) {
-                    textView.setSelectedRange(NSRange(location: dest, length: 0))
-                    textView.scrollRangeToVisible(textView.selectedRange())
-                }
-                return true
-
-            case .killWord, .backwardKillWord:
-                if let range = EmacsMotion.killRange(for: command, in: textView.string, caret: caret) {
-                    let nsRange = NSRange(location: range.lowerBound, length: range.count)
-                    if textView.shouldChangeText(in: nsRange, replacementString: "") {
-                        textView.textStorage?.replaceCharacters(in: nsRange, with: "")
-                        textView.didChangeText()
-                    }
-                }
-                return true
-
-            case .keyboardQuit:
-                // Collapse any selection to its caret. Mark-state clearing is
-                // layered on in the kill-ring task.
-                let range = textView.selectedRange()
-                textView.setSelectedRange(NSRange(location: range.location + range.length, length: 0))
-                return true
-
-            default:
-                return true
-            }
         }
 
         private var scrollObserver: NSObjectProtocol?
@@ -479,6 +445,12 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
+            // A user edit deactivates the mark and ends any yank-pop sequence;
+            // Emacs-driven edits manage that state themselves.
+            if !isPerformingEmacsEdit {
+                emacsMark = nil
+                lastYankRange = nil
+            }
             viewModel.updateContent(textView.string)
             runDecorations(on: textView)
             maybeShowSlashMenu(in: textView)
