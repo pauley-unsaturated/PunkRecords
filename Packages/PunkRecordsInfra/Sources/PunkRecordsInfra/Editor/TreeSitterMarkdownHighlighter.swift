@@ -102,7 +102,7 @@ public final class TreeSitterMarkdownHighlighter {
 
     // MARK: - Configuration helpers
 
-    static func makeMarkdownConfiguration() throws -> LanguageConfiguration {
+    nonisolated static func makeMarkdownConfiguration() throws -> LanguageConfiguration {
         let language = Language(language: tree_sitter_markdown())
         if let url = locateQueriesDirectory(named: "TreeSitterMarkdown_TreeSitterMarkdown") {
             return try LanguageConfiguration(language, name: "Markdown", queriesURL: url)
@@ -110,7 +110,7 @@ public final class TreeSitterMarkdownHighlighter {
         return try LanguageConfiguration(language, name: "Markdown")
     }
 
-    static func makeInlineConfiguration() throws -> LanguageConfiguration {
+    nonisolated static func makeInlineConfiguration() throws -> LanguageConfiguration {
         let language = Language(language: tree_sitter_markdown_inline())
         if let url = locateQueriesDirectory(named: "TreeSitterMarkdown_TreeSitterMarkdownInline") {
             return try LanguageConfiguration(language, name: "MarkdownInline", queriesURL: url)
@@ -126,7 +126,7 @@ public final class TreeSitterMarkdownHighlighter {
     /// out-of-tree helper (`swiftpm-testing-helper`). This fallback also looks next to
     /// the bundle that contains *this* class — which is the test bundle under
     /// `swift test`, and the app bundle in production.
-    static func locateQueriesDirectory(named bundleName: String) -> URL? {
+    nonisolated static func locateQueriesDirectory(named bundleName: String) -> URL? {
         let fileName = "\(bundleName).bundle"
         let candidateRoots: [URL] = {
             var roots: [URL] = []
@@ -153,7 +153,7 @@ public final class TreeSitterMarkdownHighlighter {
         return nil
     }
 
-    static func makeLanguageProvider() -> (String) -> LanguageConfiguration? {
+    nonisolated static func makeLanguageProvider() -> (String) -> LanguageConfiguration? {
         return { name in
             switch name.lowercased() {
             case "markdown_inline", "markdowninline", "inline":
@@ -236,7 +236,7 @@ public final class TreeSitterMarkdownHighlighter {
     /// child grammar is a superset of the parent's node types. If the combined
     /// query fails to compile for any reason, falls back to the child's own
     /// queries so highlighting degrades gracefully instead of vanishing.
-    static func makeInheritedCodeConfiguration(
+    nonisolated static func makeInheritedCodeConfiguration(
         language: Language,
         name: String,
         childBundle: String,
@@ -277,7 +277,7 @@ public final class TreeSitterMarkdownHighlighter {
     /// Build a `LanguageConfiguration` for an injected code grammar, using the
     /// bundle-discovery fallback so queries are found under both the app and
     /// `swift test`.
-    static func makeCodeConfiguration(
+    nonisolated static func makeCodeConfiguration(
         language: Language,
         name: String,
         bundleName: String
@@ -291,13 +291,13 @@ public final class TreeSitterMarkdownHighlighter {
     /// Test seam: the capture names in the highlights query for a fenced-code
     /// language, or nil if it doesn't resolve. Lets tests confirm that an
     /// inherited grammar (TypeScript, C++) actually merged its parent's rules.
-    static func highlightsCaptureNames(forFence name: String) -> [String]? {
+    nonisolated static func highlightsCaptureNames(forFence name: String) -> [String]? {
         guard let config = makeLanguageProvider()(name),
               let highlights = config.queries[.highlights] else { return nil }
         return (0..<highlights.captureCount).compactMap { highlights.captureName(for: $0) }
     }
 
-    static func makeAttributeProvider(theme: Theme) -> TokenAttributeProvider {
+    nonisolated static func makeAttributeProvider(theme: Theme) -> TokenAttributeProvider {
         return { token in
             Self.attributes(for: token.name, theme: theme)
         }
@@ -305,7 +305,7 @@ public final class TreeSitterMarkdownHighlighter {
 
     /// Pure mapping from a tree-sitter capture name to text attributes.
     /// Extracted so it can be unit-tested without instantiating an NSTextView.
-    public static func attributes(
+    nonisolated public static func attributes(
         for tokenName: String,
         theme: Theme = .default
     ) -> [NSAttributedString.Key: Any] {
@@ -358,9 +358,49 @@ public final class TreeSitterMarkdownHighlighter {
         }
     }
 
+    /// One highlighted span of a standalone code string: a UTF-16 range and the
+    /// tree-sitter capture name that applies to it.
+    public struct CodeHighlightSpan: Sendable, Equatable {
+        public let range: NSRange
+        public let captureName: String
+
+        public init(range: NSRange, captureName: String) {
+            self.range = range
+            self.captureName = captureName
+        }
+    }
+
+    /// Static (non-live) syntax highlighting for a standalone code string in a
+    /// given fence language. Used by the read-only preview, which renders each
+    /// code block on its own rather than as an injection inside Markdown.
+    ///
+    /// Resolves the language with the same provider the live editor uses, parses
+    /// the code, runs the grammar's highlights query, and returns the captured
+    /// spans (UTF-16 ranges into `code`) with predicates evaluated so rules like
+    /// `(#match? @type "^[A-Z]")` don't over-apply. Returns nil for unsupported
+    /// languages so the caller can fall back to plain text.
+    nonisolated public static func codeHighlightSpans(for code: String, language: String) -> [CodeHighlightSpan]? {
+        guard let config = makeLanguageProvider()(language),
+              let highlights = config.queries[.highlights] else { return nil }
+
+        let parser = Parser()
+        do { try parser.setLanguage(config.language) } catch { return nil }
+        guard let tree = parser.parse(code), let root = tree.rootNode else { return nil }
+
+        let context = Predicate.Context(string: code)
+        var spans: [CodeHighlightSpan] = []
+        for match in highlights.execute(node: root, in: tree).resolve(with: context) {
+            for capture in match.captures {
+                guard let name = capture.name else { continue }
+                spans.append(CodeHighlightSpan(range: capture.range, captureName: name))
+            }
+        }
+        return spans
+    }
+
     /// Resolve a fenced-code capture name to a color from the theme's code
     /// palette, or nil if it isn't a recognized code capture.
-    static func codeColor(for tokenName: String, theme: Theme) -> NSColor? {
+    nonisolated static func codeColor(for tokenName: String, theme: Theme) -> NSColor? {
         let root = tokenName.split(separator: ".").first.map(String.init) ?? tokenName
         let codeRoots: Set<String> = [
             "keyword", "string", "comment", "number", "function", "method",

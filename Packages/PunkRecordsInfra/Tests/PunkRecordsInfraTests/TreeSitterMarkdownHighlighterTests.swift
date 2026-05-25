@@ -166,6 +166,44 @@ struct TreeSitterMarkdownHighlighterTests {
         #expect(attrs[.foregroundColor] as? NSColor == .systemPink)
     }
 
+    // MARK: - Static code highlighting (preview)
+
+    @Test("Static code highlighting returns capture spans for a known language")
+    func staticCodeSpans() throws {
+        let code = "let x = 42 // note"
+        let spans = try #require(TreeSitterMarkdownHighlighter.codeHighlightSpans(for: code, language: "swift"))
+        #expect(spans.isEmpty == false)
+        let names = Set(spans.map(\.captureName))
+        #expect(names.contains { $0.hasPrefix("keyword") }, "expected a keyword capture for 'let'")
+        #expect(names.contains { $0.hasPrefix("comment") }, "expected a comment capture")
+    }
+
+    @Test("Static code highlighting resolves an inherited TypeScript fence")
+    func staticCodeTypeScript() throws {
+        let spans = try #require(
+            TreeSitterMarkdownHighlighter.codeHighlightSpans(
+                for: "interface Foo { x: number }", language: "typescript"
+            )
+        )
+        #expect(spans.isEmpty == false)
+    }
+
+    @Test("Static code highlighting returns nil for unsupported language")
+    func staticCodeUnsupported() {
+        #expect(TreeSitterMarkdownHighlighter.codeHighlightSpans(for: "x = 1", language: "haskell") == nil)
+    }
+
+    @Test("Static code spans stay within the code string's bounds")
+    func staticCodeSpansInBounds() throws {
+        let code = "func greet() { print(\"hi\") }"
+        let length = (code as NSString).length
+        let spans = try #require(TreeSitterMarkdownHighlighter.codeHighlightSpans(for: code, language: "swift"))
+        for span in spans {
+            #expect(span.range.location >= 0)
+            #expect(span.range.location + span.range.length <= length)
+        }
+    }
+
     // MARK: - Integration with NSTextView (smoke test)
 
     @Test("Highlighter installs onto an NSTextView without throwing")
