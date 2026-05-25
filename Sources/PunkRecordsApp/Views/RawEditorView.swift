@@ -302,8 +302,8 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         textView.isEmacsEnabled = { [weak coordinator = context.coordinator] in
             coordinator?.emacsEnabled ?? false
         }
-        textView.performEmacsCommand = { [weak coordinator = context.coordinator] command in
-            coordinator?.performEmacsCommand(command, in: textView) ?? false
+        textView.handleEmacsChord = { [weak coordinator = context.coordinator] chord in
+            coordinator?.handleEmacsChord(chord, in: textView) ?? false
         }
 
         context.coordinator.runDecorations(on: textView)
@@ -373,6 +373,8 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         /// True while an Emacs command is mutating the text, so `textDidChange`
         /// doesn't clear mark/yank state mid-operation (only user edits should).
         var isPerformingEmacsEdit = false
+        /// True after a `C-x` prefix, awaiting the second key of the sequence.
+        var awaitingCtrlX = false
 
         init(viewModel: DocumentEditorViewModel, onAskAI: ((String) -> Void)? = nil) {
             self.viewModel = viewModel

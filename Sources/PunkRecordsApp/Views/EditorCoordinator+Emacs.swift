@@ -6,11 +6,35 @@ import PunkRecordsCore
 /// `EmacsMotion`, `EmacsKillRing`); this extension applies their results to the
 /// `NSTextView` and owns the stateful mark/region/yank wiring.
 extension EditorTextViewRepresentable.Coordinator {
+    /// Resolve a raw chord, handling the `C-x` two-key prefix, then map the
+    /// rest through `EmacsKeymap`. Returns true if the chord was consumed.
+    func handleEmacsChord(_ chord: EmacsKeyChord, in textView: NSTextView) -> Bool {
+        if awaitingCtrlX {
+            awaitingCtrlX = false
+            return performCtrlXCommand(chord, in: textView)
+        }
+        // `C-x` opens a prefix sequence completed by the next key.
+        if chord == EmacsKeyChord(key: "x", control: true, meta: false) {
+            awaitingCtrlX = true
+            return true
+        }
+        guard let command = EmacsKeymap.command(for: chord) else { return false }
+        return performEmacsCommand(command, in: textView)
+    }
+
+    /// Second key of a `C-x` sequence: `C-x C-s` saves, `C-x u` undoes. Other
+    /// keys are consumed as no-ops (the sequence was deliberately initiated).
+    private func performCtrlXCommand(_ chord: EmacsKeyChord, in textView: NSTextView) -> Bool {
+        if chord.key == "s", chord.control {            // C-x C-s
+            Task { try? await viewModel.save() }
+        } else if chord.key == "u" {                    // C-x u
+            textView.undoManager?.undo()
+        }
+        return true
+    }
+
     /// Execute a resolved Emacs command. Returns true when the command is
     /// consumed (so the key event is not passed on for default handling).
-    ///
-    /// Recognized-but-not-yet-implemented commands are consumed (no-op) so
-    /// Meta/Control chords don't insert stray characters (e.g. Option-d → ∂).
     func performEmacsCommand(_ command: EmacsCommand, in textView: NSTextView) -> Bool {
         isPerformingEmacsEdit = true
         defer { isPerformingEmacsEdit = false }
@@ -71,9 +95,32 @@ extension EditorTextViewRepresentable.Coordinator {
             textView.setSelectedRange(NSRange(location: caret + selection.length, length: 0))
             return true
 
-        default:
+        case .undo:
+            textView.undoManager?.undo()
+            return true
+
+        case .capitalizeWord, .upcaseWord, .downcaseWord:
+            if let edit = EmacsEdit.caseEdit(command, in: textView.string, caret: caret) {
+                applyEdit(edit, in: textView)
+            }
+            return true
+
+        case .transposeWords:
+            if let edit = EmacsEdit.transposeWords(in: textView.string, caret: caret) {
+                applyEdit(edit, in: textView)
+            }
             return true
         }
+    }
+
+    /// Apply a pure `EmacsEdit.Edit` (case change / transpose) to the text view.
+    private func applyEdit(_ edit: EmacsEdit.Edit, in textView: NSTextView) {
+        let range = NSRange(location: edit.range.lowerBound, length: edit.range.count)
+        guard NSMaxRange(range) <= (textView.string as NSString).length,
+              textView.shouldChangeText(in: range, replacementString: edit.replacement) else { return }
+        textView.textStorage?.replaceCharacters(in: range, with: edit.replacement)
+        textView.didChangeText()
+        textView.setSelectedRange(NSRange(location: edit.caret, length: 0))
     }
 
     /// The point (caret) used for motions — the active end of the selection.

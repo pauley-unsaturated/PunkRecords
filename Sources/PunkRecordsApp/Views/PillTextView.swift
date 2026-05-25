@@ -21,8 +21,9 @@ final class PillTextView: NSTextView {
     weak var completionController: WikilinkCompletionController?
     /// Whether Emacs keybindings are active. Set by the Coordinator.
     var isEmacsEnabled: () -> Bool = { false }
-    /// Executes a resolved Emacs command; returns true if it was consumed.
-    var performEmacsCommand: ((EmacsCommand) -> Bool)?
+    /// Handles a raw Emacs chord (the Coordinator resolves prefixes + keymap);
+    /// returns true if it was consumed.
+    var handleEmacsChord: ((EmacsKeyChord) -> Bool)?
 
     override func keyDown(with event: NSEvent) {
         // Emacs dispatch: intercept Control/Meta chords before the default
@@ -32,8 +33,7 @@ final class PillTextView: NSTextView {
            !hasMarkedText(),
            completionController?.isVisible != true,
            let chord = EmacsKeyChord(event: event),
-           let command = EmacsKeymap.command(for: chord),
-           performEmacsCommand?(command) == true {
+           handleEmacsChord?(chord) == true {
             return
         }
         super.keyDown(with: event)
