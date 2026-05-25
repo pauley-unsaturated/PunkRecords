@@ -174,6 +174,68 @@ extension VaultWindow {
         try? scratch.write(to: tempDir.appendingPathComponent("scratch-note.md"),
                            atomically: true, encoding: .utf8)
 
+        // Notes for refile (⌘⇧M) UI tests. "Movable" has no inbound links
+        // (direct move); "Linked Section" is referenced by Linker so refiling it
+        // triggers the link-update dialog. Each note's last heading is the one a
+        // caret-at-end lands in, keeping the tests deterministic.
+        let refilePlain = """
+        ---
+        id: CCCCCCCC-0000-0000-0000-000000000001
+        title: Refile Plain
+        ---
+
+        # Refile Plain
+
+        ## Movable
+
+        movable body
+        """
+        try? refilePlain.write(to: tempDir.appendingPathComponent("refile-plain.md"),
+                               atomically: true, encoding: .utf8)
+
+        let refileLinked = """
+        ---
+        id: CCCCCCCC-0000-0000-0000-000000000002
+        title: Refile Linked
+        ---
+
+        # Refile Linked
+
+        ## Linked Section
+
+        linked body
+        """
+        try? refileLinked.write(to: tempDir.appendingPathComponent("refile-linked.md"),
+                                atomically: true, encoding: .utf8)
+
+        let refileDest = """
+        ---
+        id: CCCCCCCC-0000-0000-0000-000000000003
+        title: Refile Dest
+        ---
+
+        # Refile Dest
+
+        ## Bucket
+
+        bucket body
+        """
+        try? refileDest.write(to: tempDir.appendingPathComponent("refile-dest.md"),
+                              atomically: true, encoding: .utf8)
+
+        let linker = """
+        ---
+        id: CCCCCCCC-0000-0000-0000-000000000004
+        title: Linker
+        ---
+
+        # Linker
+
+        see [[Refile Linked#Linked Section]] for details
+        """
+        try? linker.write(to: tempDir.appendingPathComponent("linker.md"),
+                          atomically: true, encoding: .utf8)
+
         return tempDir
     }
 }
