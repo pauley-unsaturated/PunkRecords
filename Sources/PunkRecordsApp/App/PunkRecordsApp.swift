@@ -67,6 +67,12 @@ struct PunkRecordsApp: App {
                 .keyboardShortcut("f", modifiers: [.command, .option, .shift])
             }
             CommandMenu("Editor") {
+                Button("Refile Heading…") {
+                    NotificationCenter.default.post(name: .vaultWindowRefile, object: nil)
+                }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+
+                Divider()
                 Toggle("Emacs Keybindings", isOn: $emacsKeybindings)
             }
         }

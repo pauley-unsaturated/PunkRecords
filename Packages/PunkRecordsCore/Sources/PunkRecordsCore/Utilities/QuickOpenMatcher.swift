@@ -63,6 +63,16 @@ public enum QuickOpenMatcher {
             .map { $0 }
     }
 
+    /// Fuzzy score for an arbitrary candidate string (e.g. a refile target's
+    /// `File ▸ Heading ▸ Sub` path), reusing the same subsequence scoring as the
+    /// Quick Open palette. Returns nil when `query` isn't an in-order
+    /// subsequence of `candidate`; an empty query scores 0 (matches everything).
+    public static func fuzzyScore(candidate: String, query: String) -> Int? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return 0 }
+        return score(title: candidate, queryChars: Array(trimmed.lowercased()))?.score
+    }
+
     /// Greedy left-to-right subsequence match. Returns nil if `queryChars`
     /// can't be matched as an in-order subsequence of `title`.
     private static func score(title: String, queryChars: [Character]) -> (score: Int, indices: [Int])? {

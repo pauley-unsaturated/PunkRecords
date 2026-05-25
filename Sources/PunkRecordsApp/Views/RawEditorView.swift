@@ -29,6 +29,12 @@ struct RawEditorView: View {
                         onSelectionChanged: { selectedText in
                             appState.selectedText = selectedText
                         },
+                        onCaretChanged: { caret in
+                            appState.editorCaretLocation = caret
+                        },
+                        onTextChanged: { text in
+                            appState.editorText = text
+                        },
                         isWikilinkResolved: { target in
                             appState.documents.contains {
                                 $0.title.caseInsensitiveCompare(target) == .orderedSame
@@ -95,6 +101,10 @@ struct RawEditorView: View {
         .task(id: documentPath) {
             await loadDocument()
         }
+        .onChange(of: appState.editorReloadToken) {
+            // A refile rewrote files on disk; reload so the open note reflects it.
+            Task { await loadDocument() }
+        }
     }
 
     /// Open a note by title, or prompt to create it when none exists. Shared by
@@ -151,6 +161,10 @@ struct RawEditorView: View {
                     repository: repo,
                     searchIndex: appState.searchIndex
                 )
+                // Keep AppState's live-editor mirror in sync so refile reads the
+                // freshly-loaded content (not a stale pre-reload value).
+                appState.editorText = doc.content
+                appState.editorCaretLocation = 0
             }
         } catch {
             appState.errorMessage = "Failed to load document: \(error.localizedDescription)"
@@ -178,6 +192,10 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
     let viewModel: DocumentEditorViewModel
     var onAskAI: ((String) -> Void)?
     var onSelectionChanged: ((String?) -> Void)?
+    /// Reports the caret's UTF-16 location on every selection change.
+    var onCaretChanged: ((Int) -> Void)?
+    /// Reports the full editor text on every change.
+    var onTextChanged: ((String) -> Void)?
     var isWikilinkResolved: ((String) -> Bool)?
     var onWikilinkClick: ((WikilinkDecorator.ClickAction) -> Void)?
     /// Returns candidate note titles for a `[[` autocomplete query, best-first.
@@ -194,6 +212,8 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         viewModel: DocumentEditorViewModel,
         onAskAI: ((String) -> Void)? = nil,
         onSelectionChanged: ((String?) -> Void)? = nil,
+        onCaretChanged: ((Int) -> Void)? = nil,
+        onTextChanged: ((String) -> Void)? = nil,
         isWikilinkResolved: ((String) -> Bool)? = nil,
         onWikilinkClick: ((WikilinkDecorator.ClickAction) -> Void)? = nil,
         wikilinkCompletions: ((String) -> [String])? = nil,
@@ -205,6 +225,8 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         self.viewModel = viewModel
         self.onAskAI = onAskAI
         self.onSelectionChanged = onSelectionChanged
+        self.onCaretChanged = onCaretChanged
+        self.onTextChanged = onTextChanged
         self.isWikilinkResolved = isWikilinkResolved
         self.onWikilinkClick = onWikilinkClick
         self.wikilinkCompletions = wikilinkCompletions
@@ -339,6 +361,8 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         let coordinator = Coordinator(viewModel: viewModel, onAskAI: onAskAI)
         coordinator.onSelectionChanged = onSelectionChanged
+        coordinator.onCaretChanged = onCaretChanged
+        coordinator.onTextChanged = onTextChanged
         return coordinator
     }
 
@@ -347,6 +371,8 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         let viewModel: DocumentEditorViewModel
         let onAskAI: ((String) -> Void)?
         var onSelectionChanged: ((String?) -> Void)?
+        var onCaretChanged: ((Int) -> Void)?
+        var onTextChanged: ((String) -> Void)?
         var highlighter: TreeSitterMarkdownHighlighter?
         var decorator: HybridUXDecorator?
         var wikilinkDecorator: WikilinkDecorator?
@@ -421,6 +447,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             } else {
                 onSelectionChanged?(nil)
             }
+            onCaretChanged?(textView.selectedRange().location)
             runDecorations(on: textView)
             updateCompletion(in: textView)
         }
@@ -454,6 +481,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
                 lastYankRange = nil
             }
             viewModel.updateContent(textView.string)
+            onTextChanged?(textView.string)
             runDecorations(on: textView)
             maybeShowSlashMenu(in: textView)
             updateCompletion(in: textView)

@@ -16,6 +16,18 @@ final class AppState {
     var askAIText: String?
     var selectedText: String?
 
+    // MARK: - Refile (⌘⇧M)
+
+    /// Live text + caret of the open editor, reported on every edit/selection so
+    /// refile operates on what's actually on screen (not a stale session copy).
+    var editorText: String = ""
+    var editorCaretLocation: Int = 0
+    /// The heading the refile picker will move, captured when ⌘⇧M opens it.
+    var refileSource: RefileSource?
+    var isRefilePresented = false
+    /// Bumped after a refile writes the open document so the editor reloads.
+    var editorReloadToken = UUID()
+
     /// Sidebar navigation filter. Shared here (rather than local to the sidebar
     /// view) so the editor can drive it — clicking a `#tag` pill sets it to
     /// `tag:<name>` to filter the note list. See `SidebarFilter`.

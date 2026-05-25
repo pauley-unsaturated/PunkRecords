@@ -52,6 +52,12 @@ struct VaultWindow: View {
         )) {
             QuickOpenView()
         }
+        .sheet(isPresented: Binding(
+            get: { appState.isRefilePresented },
+            set: { appState.isRefilePresented = $0 }
+        )) {
+            RefileView()
+        }
         .environment(appState)
         .navigationTitle(appState.currentVault?.name ?? "PunkRecords")
         .task {
@@ -76,6 +82,9 @@ struct VaultWindow: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .vaultWindowQuickOpen)) { _ in
             appState.isQuickOpenPresented = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .vaultWindowRefile)) { _ in
+            appState.beginRefile()
         }
     }
 
@@ -121,6 +130,7 @@ extension Notification.Name {
     static let vaultWindowFocusSidebarSearch = Notification.Name("vaultWindowFocusSidebarSearch")
     static let vaultWindowExportHTML = Notification.Name("vaultWindowExportHTML")
     static let vaultWindowQuickOpen = Notification.Name("vaultWindowQuickOpen")
+    static let vaultWindowRefile = Notification.Name("vaultWindowRefile")
 }
 
 // MARK: - UI Testing Support
