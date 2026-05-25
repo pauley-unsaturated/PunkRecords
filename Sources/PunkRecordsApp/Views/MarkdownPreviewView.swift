@@ -20,7 +20,7 @@ struct MarkdownPreviewView: View {
     var body: some View {
         ScrollView {
             Markdown(renderedBody)
-                .markdownTheme(.gitHub)
+                .markdownTheme(.punk(theme))
                 .markdownCodeSyntaxHighlighter(
                     TreeSitterCodeSyntaxHighlighter(theme: theme.highlighterTheme)
                 )
@@ -29,7 +29,7 @@ struct MarkdownPreviewView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
         }
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(Color(nsColor: theme.background))
         .accessibilityIdentifier("markdownPreview")
         .environment(\.openURL, OpenURLAction(handler: handleLink))
     }
