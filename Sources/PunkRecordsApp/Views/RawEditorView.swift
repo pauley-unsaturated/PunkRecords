@@ -381,13 +381,33 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         /// consumed (no-op) so Meta/Control chords don't insert stray
         /// characters (e.g. Option-d → ∂) in the interim.
         func performEmacsCommand(_ command: EmacsCommand, in textView: NSTextView) -> Bool {
+            let caret = textView.selectedRange().location
             switch command {
+            case .forwardWord, .backwardWord, .forwardSentence, .backwardSentence,
+                 .forwardParagraph, .backwardParagraph, .beginningOfBuffer, .endOfBuffer:
+                if let dest = EmacsMotion.caretDestination(for: command, in: textView.string, caret: caret) {
+                    textView.setSelectedRange(NSRange(location: dest, length: 0))
+                    textView.scrollRangeToVisible(textView.selectedRange())
+                }
+                return true
+
+            case .killWord, .backwardKillWord:
+                if let range = EmacsMotion.killRange(for: command, in: textView.string, caret: caret) {
+                    let nsRange = NSRange(location: range.lowerBound, length: range.count)
+                    if textView.shouldChangeText(in: nsRange, replacementString: "") {
+                        textView.textStorage?.replaceCharacters(in: nsRange, with: "")
+                        textView.didChangeText()
+                    }
+                }
+                return true
+
             case .keyboardQuit:
                 // Collapse any selection to its caret. Mark-state clearing is
                 // layered on in the kill-ring task.
                 let range = textView.selectedRange()
                 textView.setSelectedRange(NSRange(location: range.location + range.length, length: 0))
                 return true
+
             default:
                 return true
             }
