@@ -8,9 +8,13 @@ import PunkRecordsInfra
 struct MarkdownPreviewView: View {
     let content: String
     var theme: EditorTheme = .dracula
+    /// Invoked when a `[[wikilink]]` is clicked, with the resolved target title.
+    var onOpenNote: (String) -> Void = { _ in }
+    /// Invoked when a `#tag` is clicked, with the tag name (no leading `#`).
+    var onOpenTag: (String) -> Void = { _ in }
 
     private var renderedBody: String {
-        MarkdownParser().parseFrontmatter(from: content).body
+        PreviewLinkRewriter.rewrite(MarkdownParser().parseFrontmatter(from: content).body)
     }
 
     var body: some View {
@@ -27,6 +31,24 @@ struct MarkdownPreviewView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .accessibilityIdentifier("markdownPreview")
+        .environment(\.openURL, OpenURLAction(handler: handleLink))
+    }
+
+    /// Route `punk://` links to in-app navigation; everything else opens
+    /// externally via the system default (browser).
+    private func handleLink(_ url: URL) -> OpenURLAction.Result {
+        guard url.scheme == PreviewLinkRewriter.scheme else { return .systemAction }
+        let value = url.path.hasPrefix("/") ? String(url.path.dropFirst()) : url.path
+        switch url.host {
+        case PreviewLinkRewriter.noteHost:
+            onOpenNote(value)
+            return .handled
+        case PreviewLinkRewriter.tagHost:
+            onOpenTag(value)
+            return .handled
+        default:
+            return .discarded
+        }
     }
 }
 

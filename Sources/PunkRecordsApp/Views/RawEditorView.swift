@@ -13,7 +13,11 @@ struct RawEditorView: View {
         Group {
             if let viewModel {
                 if isPreviewing {
-                    MarkdownPreviewView(content: viewModel.document.content)
+                    MarkdownPreviewView(
+                        content: viewModel.document.content,
+                        onOpenNote: { target in openNoteByTitle(target) },
+                        onOpenTag: { tag in appState.sidebarFilterQuery = "tag:\(tag)" }
+                    )
                 } else {
                     EditorTextViewRepresentable(
                         viewModel: viewModel,
@@ -89,6 +93,15 @@ struct RawEditorView: View {
         .task(id: documentPath) {
             await loadDocument()
         }
+    }
+
+    /// Open a note by title, or prompt to create it when none exists. Shared by
+    /// the editor's pill clicks and the preview's `[[wikilink]]` links.
+    private func openNoteByTitle(_ title: String) {
+        let resolved = appState.documents.contains {
+            $0.title.caseInsensitiveCompare(title) == .orderedSame
+        }
+        handleWikilinkClick(resolved ? .open(target: title) : .create(title: title))
     }
 
     /// Open the clicked wikilink, or prompt to create it when it has no note.
