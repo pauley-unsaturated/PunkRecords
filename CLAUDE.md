@@ -22,9 +22,39 @@ xcodebuild -scheme PunkRecords -configuration Debug test -only-testing:PunkRecor
 
 # Run a single test class or method
 xcodebuild -scheme PunkRecords -configuration Debug test -only-testing:PunkRecordsIntegrationTests/ContextBuilderTests/testSmallTier
+
+# Lint (style backstop) — run before committing; --strict turns warnings into errors
+swiftlint
+swiftlint --strict
 ```
 
-Requires **Xcode 16+**, **XcodeGen** (`brew install xcodegen`), macOS 15+.
+Requires **Xcode 16+**, **XcodeGen** (`brew install xcodegen`), **SwiftLint** (`brew install swiftlint`), macOS 15+.
+
+## Testing & Validation Discipline
+
+Automated coverage is strong for pure logic but historically absent for the
+SwiftUI/AppKit layer. To keep that gap from growing, follow this order:
+
+1. **(Default, do this every feature) Lift logic out of views.** When building
+   anything in a SwiftUI view or `NSTextView`/AppKit wiring, pull the decision,
+   transformation, or parsing into a **pure function** in Core (or Infra if it
+   needs AppKit) and unit-test *that*. The view becomes a thin shell that calls
+   tested logic. Established examples to mirror: `TagAutocomplete`,
+   `WikilinkAutocomplete`, `PreviewLinkRewriter`, `SidebarFilter`,
+   `QuickOpenMatcher`, `TreeSitterMarkdownHighlighter.codeHighlightSpans`.
+   Before closing an issue, ask: "what part of this could be a pure function,
+   and did I test it?"
+
+2. **(Backstop, after #1) XCUITest the golden path.** For critical end-to-end
+   interactions (e.g. type `#` → popover → accept; preview link → navigation),
+   add a test to `PunkRecordsUITests`. Higher fidelity but slower/flakier, so
+   reserve it for a few load-bearing flows rather than everything.
+
+3. **(Explicitly manual) Pure-visual checks.** Theme colors, popover placement,
+   and rendering appearance have poor automation ROI — validate by hand and say
+   so in the issue's close reason so it's clear what was *not* automated.
+
+Run `swiftlint` before every commit as a style backstop (see Build Commands).
 
 ## Architecture
 

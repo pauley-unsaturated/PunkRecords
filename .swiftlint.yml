@@ -1,0 +1,80 @@
+# SwiftLint configuration for PunkRecords.
+# A pragmatic style backstop — catch real issues, not pedantry.
+
+included:
+  - Sources
+  - Tests
+  - Packages/PunkRecordsCore/Sources
+  - Packages/PunkRecordsCore/Tests
+  - Packages/PunkRecordsInfra/Sources
+  - Packages/PunkRecordsInfra/Tests
+  - Packages/PunkRecordsTestSupport/Sources
+  - Packages/PunkRecordsEvals/Sources
+
+excluded:
+  - .build
+  - DerivedData
+  - Packages/PunkRecordsCore/.build
+  - Packages/PunkRecordsInfra/.build
+  - Packages/PunkRecordsTestSupport/.build
+  - Packages/PunkRecordsEvals/.build
+  - Tests/PunkRecordsEvalTests/Fixtures   # generated/handwritten fixture data, not production code
+  - Tests/PunkRecordsUITests/Fixtures
+
+disabled_rules:
+  - todo            # tracked in beads, not enforced inline
+  - trailing_comma  # codebase intentionally uses trailing commas in multiline literals
+  - force_try       # `try! NSRegularExpression(pattern: <string-literal>)` is a safe, pervasive idiom here
+  - large_tuple     # a few intentional 3-tuples in eval/test helpers
+
+# Downgrade correctness-ish rules from error to warning so the post-edit lint
+# hook stays an advisory backstop rather than a hard gate on pre-existing code.
+force_cast: warning
+shorthand_operator: warning
+function_parameter_count:
+  warning: 6
+  error: 15
+
+opt_in_rules:
+  - empty_count
+  - closure_spacing
+  - first_where
+  - explicit_init
+  - contains_over_filter_count
+  - last_where
+
+line_length:
+  warning: 140
+  error: 240
+  ignores_comments: true
+  ignores_urls: true
+
+type_body_length:
+  warning: 450
+  error: 700
+
+file_length:
+  warning: 700
+  error: 1100
+
+function_body_length:
+  warning: 100
+  error: 200
+
+identifier_name:
+  min_length:
+    warning: 1   # allow i, x, c, f in tight numeric/parsing loops
+    error: 0     # never error on short names
+  max_length:
+    warning: 60
+    error: 80
+
+type_name:
+  max_length:
+    warning: 60
+
+cyclomatic_complexity:
+  warning: 20
+
+nesting:
+  type_level: 3
