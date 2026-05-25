@@ -11,7 +11,7 @@ struct RefileView: View {
     @State private var selectedIndex = 0
     @State private var pendingTarget: RefileTarget?
     @State private var pendingLinkCount = 0
-    @State private var showLinkDialog = false
+    @State private var showingConfirmation = false
     @FocusState private var fieldFocused: Bool
 
     private var targets: [RefileTarget] { appState.refileTargets() }
@@ -32,23 +32,41 @@ struct RefileView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
-            list
+            if showingConfirmation {
+                confirmationPanel
+            } else {
+                header
+                Divider()
+                list
+            }
         }
         .frame(width: 560, height: 420)
         .onAppear { fieldFocused = true }
-        .confirmationDialog(
-            "\(pendingLinkCount) link\(pendingLinkCount == 1 ? "" : "s") point to “\(appState.refileSource?.headingTitle ?? "")”",
-            isPresented: $showLinkDialog,
-            titleVisibility: .visible
-        ) {
-            Button("Update Links & Move") { commit(updateLinks: true) }
-            Button("Move Without Updating") { commit(updateLinks: false) }
-            Button("Cancel", role: .cancel) { pendingTarget = nil }
-        } message: {
+    }
+
+    /// Inline link-impact confirmation (shown within the sheet rather than as a
+    /// separate alert, which presents unreliably over a sheet).
+    private var confirmationPanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("\(pendingLinkCount) link\(pendingLinkCount == 1 ? "" : "s") point to “\(appState.refileSource?.headingTitle ?? "")”")
+                .font(.headline)
             Text("Moving this heading to another note would change those links.")
+                .foregroundStyle(.secondary)
+            Spacer()
+            HStack {
+                Button("Cancel") {
+                    showingConfirmation = false
+                    pendingTarget = nil
+                    fieldFocused = true
+                }
+                .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Move Without Updating") { commit(updateLinks: false) }
+                Button("Update Links & Move") { commit(updateLinks: true) }
+                    .keyboardShortcut(.defaultAction)
+            }
         }
+        .padding(24)
     }
 
     private var header: some View {
@@ -115,12 +133,11 @@ struct RefileView: View {
         guard matches.indices.contains(selectedIndex) else { return }
         let target = matches[selectedIndex]
         let impact = appState.refileLinkImpact(to: target)
+        pendingTarget = target
         if impact > 0 {
-            pendingTarget = target
             pendingLinkCount = impact
-            showLinkDialog = true
+            showingConfirmation = true
         } else {
-            pendingTarget = target
             commit(updateLinks: false)
         }
     }
@@ -128,8 +145,9 @@ struct RefileView: View {
     private func commit(updateLinks: Bool) {
         guard let target = pendingTarget else { return }
         Task {
+            // Stay in the source note (like org-refile) so the heading is seen
+            // to leave; the editor reloads via AppState.editorReloadToken.
             await appState.performRefile(to: target, updateLinks: updateLinks)
-            appState.selectedDocumentPath = target.documentPath
             dismiss()
         }
     }

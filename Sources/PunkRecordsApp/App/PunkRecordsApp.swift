@@ -6,6 +6,7 @@ import PunkRecordsCore
 struct PunkRecordsApp: App {
     @State private var recentsStore = RecentVaultsStore()
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
     @AppStorage("editor.emacsKeybindings") private var emacsKeybindings = false
 
     private var isUITesting: Bool {
@@ -19,6 +20,13 @@ struct PunkRecordsApp: App {
                 .environment(recentsStore)
                 .onAppear {
                     NSApplication.shared.activate(ignoringOtherApps: true)
+                    // Under UI testing, deterministically open a vault window
+                    // (VaultWindow builds its own temp vault for `--ui-testing`)
+                    // instead of relying on state restoration to reopen one.
+                    if isUITesting {
+                        openWindow(value: URL(fileURLWithPath: NSTemporaryDirectory()))
+                        dismissWindow(id: "welcome")
+                    }
                 }
         }
         .windowStyle(.hiddenTitleBar)

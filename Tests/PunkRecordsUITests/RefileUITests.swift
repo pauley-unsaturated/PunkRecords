@@ -71,13 +71,15 @@ final class RefileUITests: XCTestCase {
         field.typeText("destbucket")            // fuzzy → "Refile Dest ▸ Bucket"
         app.typeKey(.return, modifierFlags: [])
 
-        // Refile selects the destination; its content now holds the moved heading.
+        // Picker dismisses; we stay in the source note, which loses the heading.
+        XCTAssertFalse(app.textFields["refileField"].waitForExistence(timeout: 3),
+                       "picker should dismiss after committing the move")
+        waitForValue(editor, lacks: "Movable")
+
+        // The destination note now holds the moved heading + its body.
+        openNote("Refile Dest")
         waitForValue(editor, contains: "Movable")
         waitForValue(editor, contains: "movable body")
-
-        // The source note no longer contains the heading.
-        openNote("Refile Plain")
-        waitForValue(editor, lacks: "Movable")
     }
 
     func testRefileLinkDialogAppearsAndUpdates() throws {
@@ -92,7 +94,8 @@ final class RefileUITests: XCTestCase {
 
         // A [[Refile Linked#Linked Section]] link exists in Linker, so the move
         // surfaces the confirmation dialog.
-        let updateButton = app.buttons["Update Links & Move"]
+        // The inline link-impact confirmation appears within the picker sheet.
+        let updateButton = app.buttons["Update Links & Move"].firstMatch
         XCTAssertTrue(updateButton.waitForExistence(timeout: 3),
                       "Moving a linked heading should prompt to update links")
         updateButton.click()
