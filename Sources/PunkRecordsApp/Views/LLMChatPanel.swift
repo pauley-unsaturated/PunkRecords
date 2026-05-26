@@ -129,12 +129,15 @@ struct LLMChatPanel: View {
                             Image(systemName: "checkmark")
                         }
                         Text(id.displayName)
-                        if !availableProviders.contains(id) {
+                        if !isSelectable(id) {
                             Text("(not configured)").foregroundStyle(.secondary)
                         }
                     }
                 }
-                .disabled(!availableProviders.contains(id))
+                // Local providers stay selectable even before a model is chosen —
+                // selecting one reveals the model picker, which then makes the
+                // provider available. Cloud providers gate on a configured key.
+                .disabled(!isSelectable(id))
             }
         } label: {
             Label(selectedProviderID.displayName, systemImage: "cpu")
@@ -197,11 +200,18 @@ struct LLMChatPanel: View {
 
     private func providerShortcutButton(_ id: LLMProviderID, key: KeyEquivalent) -> some View {
         Button(id.displayName) {
-            if availableProviders.contains(id) {
+            if isSelectable(id) {
                 chatProviderRaw = id.rawValue
             }
         }
         .keyboardShortcut(key, modifiers: .command)
+    }
+
+    /// Whether a provider can be picked in the UI. Cloud providers require a
+    /// configured key (reported via `availableProviders`); local providers are
+    /// always selectable so the user can reach their model picker.
+    private func isSelectable(_ id: LLMProviderID) -> Bool {
+        id.isLocal || availableProviders.contains(id)
     }
 
     private func refreshAvailableProviders() async {
@@ -268,6 +278,17 @@ struct LLMChatPanel: View {
 
         guard let orchestrator = appState.orchestrator else {
             messages.append(ChatMessage(role: .assistant, content: "No LLM provider configured. Open Settings to add an API key."))
+            return
+        }
+
+        // A local provider with no model selected would silently fall back to a
+        // cloud provider — surface it instead so the user picks a model.
+        if selectedProviderID.isLocal && selectedLocalModel.isEmpty {
+            messages.append(ChatMessage(
+                role: .assistant,
+                content: "Pick a model for \(selectedProviderID.displayName) first — use the model menu "
+                    + "next to the provider, or Settings ▸ Local LLMs."
+            ))
             return
         }
 
