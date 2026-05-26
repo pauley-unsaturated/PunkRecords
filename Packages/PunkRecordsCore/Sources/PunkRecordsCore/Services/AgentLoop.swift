@@ -118,6 +118,10 @@ public actor AgentLoop {
         conversationMessages.append(ConversationMessage(role: .user, content: [.text(userContent)]))
 
         var finalText = ""
+        // Carry the most recent turn's inference stats/usage so the terminal
+        // `.done` event can report them to the UI (local-LLM stats footer).
+        var lastStats: InferenceStats?
+        var lastUsage: TokenUsage?
 
         let serverTools: [ServerToolConfig]? = enableWebSearch ? [.webSearch(maxUses: 5)] : nil
 
@@ -137,6 +141,8 @@ public actor AgentLoop {
             )
 
             let response = try await provider.completeWithTools(request)
+            lastStats = response.stats
+            lastUsage = response.usage
 
             // Emit events in document order so server-tool calls appear between
             // text segments rather than after them.
@@ -171,14 +177,14 @@ public actor AgentLoop {
             // If the LLM stopped without requesting a (local) tool, we're done
             if response.stopReason == .endTurn || response.stopReason == .maxTokens {
                 continuation.yield(.turnEnd(turnIndex: turnIndex))
-                continuation.yield(.done(finalText: finalText))
+                continuation.yield(.done(finalText: finalText, stats: lastStats, usage: lastUsage))
                 continuation.finish()
                 return
             }
 
             guard response.stopReason == .toolUse else {
                 continuation.yield(.turnEnd(turnIndex: turnIndex))
-                continuation.yield(.done(finalText: finalText))
+                continuation.yield(.done(finalText: finalText, stats: lastStats, usage: lastUsage))
                 continuation.finish()
                 return
             }
@@ -236,7 +242,7 @@ public actor AgentLoop {
 
         // Hit max iterations
         continuation.yield(.error(.maxIterationsExceeded(maxIterations)))
-        continuation.yield(.done(finalText: finalText))
+        continuation.yield(.done(finalText: finalText, stats: lastStats, usage: lastUsage))
         continuation.finish()
     }
 

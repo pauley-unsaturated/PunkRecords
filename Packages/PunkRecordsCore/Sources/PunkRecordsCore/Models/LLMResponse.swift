@@ -32,16 +32,20 @@ public struct LLMResponse: Sendable {
     public let providerID: LLMProviderID
     public let usedDocuments: [DocumentID]
     public let usage: TokenUsage?
+    /// Inference performance metrics, when the provider reports them (local LLMs).
+    public let stats: InferenceStats?
 
     public init(
         text: String,
         providerID: LLMProviderID,
         usedDocuments: [DocumentID] = [],
-        usage: TokenUsage? = nil
+        usage: TokenUsage? = nil,
+        stats: InferenceStats? = nil
     ) {
         self.text = text
         self.providerID = providerID
         self.usedDocuments = usedDocuments
         self.usage = usage
+        self.stats = stats
     }
 }
