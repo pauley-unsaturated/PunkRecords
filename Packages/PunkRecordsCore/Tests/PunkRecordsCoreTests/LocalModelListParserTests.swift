@@ -5,14 +5,14 @@ final class LocalModelListParserTests: XCTestCase {
     // MARK: - Ollama /api/tags
 
     func testParseOllamaTags() {
-        let json = """
+        let json = Data("""
         {
           "models": [
             { "name": "llama3:8b", "model": "llama3:8b", "size": 4661224676 },
             { "name": "qwen2.5-coder:7b", "model": "qwen2.5-coder:7b", "size": 4683073184 }
           ]
         }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let models = LocalModelListParser.parseOllamaTags(json)
         XCTAssertEqual(models.count, 2)
@@ -25,14 +25,14 @@ final class LocalModelListParserTests: XCTestCase {
 
     func testParseOllamaTagsEmptyOrMalformed() {
         XCTAssertTrue(LocalModelListParser.parseOllamaTags(Data()).isEmpty)
-        XCTAssertTrue(LocalModelListParser.parseOllamaTags("{}".data(using: .utf8)!).isEmpty)
-        XCTAssertTrue(LocalModelListParser.parseOllamaTags("not json".data(using: .utf8)!).isEmpty)
+        XCTAssertTrue(LocalModelListParser.parseOllamaTags(Data("{}".utf8)).isEmpty)
+        XCTAssertTrue(LocalModelListParser.parseOllamaTags(Data("not json".utf8)).isEmpty)
     }
 
     func testParseOllamaTagsSkipsNamelessEntries() {
-        let json = """
+        let json = Data("""
         { "models": [ { "size": 123 }, { "name": "good:latest" } ] }
-        """.data(using: .utf8)!
+        """.utf8)
         let models = LocalModelListParser.parseOllamaTags(json)
         XCTAssertEqual(models.map(\.id), ["good:latest"])
     }
@@ -40,7 +40,7 @@ final class LocalModelListParserTests: XCTestCase {
     // MARK: - OpenAI-compatible /v1/models
 
     func testParseOpenAIModels() {
-        let json = """
+        let json = Data("""
         {
           "object": "list",
           "data": [
@@ -48,7 +48,7 @@ final class LocalModelListParserTests: XCTestCase {
             { "id": "phi-4", "object": "model" }
           ]
         }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let models = LocalModelListParser.parseOpenAIModels(json)
         XCTAssertEqual(models.map(\.id), ["phi-4", "qwen2.5-7b-instruct"]) // sorted
@@ -57,6 +57,6 @@ final class LocalModelListParserTests: XCTestCase {
 
     func testParseOpenAIModelsMalformed() {
         XCTAssertTrue(LocalModelListParser.parseOpenAIModels(Data()).isEmpty)
-        XCTAssertTrue(LocalModelListParser.parseOpenAIModels("{}".data(using: .utf8)!).isEmpty)
+        XCTAssertTrue(LocalModelListParser.parseOpenAIModels(Data("{}".utf8)).isEmpty)
     }
 }

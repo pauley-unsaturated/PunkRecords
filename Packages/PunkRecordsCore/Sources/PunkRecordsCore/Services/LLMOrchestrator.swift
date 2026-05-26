@@ -21,6 +21,13 @@ public actor LLMOrchestrator {
         providers[provider.id] = provider
     }
 
+    /// The registered provider for an id, regardless of current availability.
+    /// Used by the UI to drive local-model discovery/selection before a model
+    /// is chosen (at which point `isAvailable()` would still report false).
+    public func registeredProvider(_ id: LLMProviderID) -> (any LLMProvider)? {
+        providers[id]
+    }
+
     public func setDefaultProvider(_ id: LLMProviderID) {
         defaultProviderID = id
     }
