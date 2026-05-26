@@ -57,13 +57,18 @@ final class DeleteFlowUITests: XCTestCase {
                       "Cancelling the confirmation should leave Scratch Note untouched")
     }
 
-    /// Look in sheets first (where SwiftUI's confirmationDialog actually
-    /// renders on macOS) and fall back to top-level app buttons if the
-    /// dialog was attached differently.
+    /// Find a confirmation button across the containers SwiftUI's
+    /// `confirmationDialog` may use on macOS, scoping to each typed container
+    /// (sheets/dialogs/popovers/windows) so we never match the Touch Bar mirror
+    /// of the button — querying `app.buttons` directly matches both and makes
+    /// `.click()` ambiguous on Touch Bar machines.
     private func confirmationButton(label: String) -> XCUIElement {
-        let sheetButton = app.sheets.buttons[label]
-        if sheetButton.exists { return sheetButton }
-        return app.buttons[label]
+        let containers = [app.sheets, app.dialogs, app.popovers, app.windows]
+        for container in containers {
+            let candidate = container.buttons[label].firstMatch
+            if candidate.waitForExistence(timeout: 1) { return candidate }
+        }
+        return app.windows.buttons[label].firstMatch
     }
 }
 
