@@ -53,6 +53,20 @@ struct PunkRecordsApp: App {
                     NotificationCenter.default.post(name: .vaultWindowQuickOpen, object: nil)
                 }
                 .keyboardShortcut("o", modifiers: [.command])
+
+                Menu("Open Recent") {
+                    ForEach(recentsStore.menuEntries) { vault in
+                        Button(vault.name) {
+                            recentsStore.recordOpen(vault.url)
+                            openWindow(value: vault.url)
+                        }
+                    }
+                    Divider()
+                    Button("Clear Menu") {
+                        recentsStore.clearAll()
+                    }
+                    .disabled(recentsStore.menuEntries.isEmpty)
+                }
             }
             CommandGroup(after: .saveItem) {
                 Divider()

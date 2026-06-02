@@ -1,4 +1,5 @@
 import Foundation
+import PunkRecordsCore
 
 /// Persists recently opened vault locations via UserDefaults.
 @MainActor
@@ -7,14 +8,18 @@ final class RecentVaultsStore {
     private static let key = "recentVaults"
     private static let maxRecents = 10
 
-    struct RecentVault: Codable, Identifiable, Hashable {
-        var id: String { url.absoluteString }
-        let name: String
-        let url: URL
-        let lastOpened: Date
-    }
+    /// The recent-vault value type lives in Core (as `RecentVaultEntry`) so the
+    /// menu's ordering/de-dup/cap logic is unit-testable; this alias keeps the
+    /// existing `RecentVaultsStore.RecentVault` call sites working.
+    typealias RecentVault = RecentVaultEntry
 
     private(set) var recents: [RecentVault] = []
+
+    /// Entries for the "File ▸ Open Recent" submenu — most-recent-first,
+    /// de-duplicated, and capped. See ``RecentVaultsMenu``.
+    var menuEntries: [RecentVault] {
+        RecentVaultsMenu.menuEntries(from: recents)
+    }
 
     init() {
         load()
