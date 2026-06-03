@@ -12,6 +12,9 @@ final class AppState {
     var isChatPanelVisible = false
     var isBacklinksPanelVisible = true
     var isLoading = false
+    /// Progress of the in-flight vault open, driving the loading overlay.
+    /// `nil` before the heavy work starts and once the vault is ready.
+    var openProgress: VaultOpenProgress?
     var errorMessage: String?
     var askAIText: String?
     var selectedText: String?
@@ -71,7 +74,24 @@ final class AppState {
 
     func openVault(at url: URL) async {
         isLoading = true
-        defer { isLoading = false }
+
+        // Progress flows from the repository/index actors (off the main actor)
+        // through a stream that coalesces to the newest value, so thousands of
+        // per-note ticks become a bounded number of @MainActor UI updates.
+        let (progressStream, progress) = AsyncStream<VaultOpenProgress>.makeStream(
+            bufferingPolicy: .bufferingNewest(1)
+        )
+        let progressTask = Task { @MainActor [weak self] in
+            for await update in progressStream {
+                self?.openProgress = update
+            }
+        }
+        defer {
+            progress.finish()
+            progressTask.cancel()
+            openProgress = nil
+            isLoading = false
+        }
 
         let name = url.lastPathComponent
         let vault = Vault(name: name, rootURL: url)
@@ -117,9 +137,13 @@ final class AppState {
                 print("[VaultOpen] healed duplicate IDs: \(summary)")
             }
 
-            let docs = try await repo.allDocuments()
+            let docs = try await repo.allDocuments(onProgress: { count in
+                progress.yield(VaultOpenProgress(phase: .reading(notesRead: count)))
+            })
             self.documents = docs
-            try await index.rebuildIndex(documents: docs)
+            try await index.rebuildIndex(documents: docs, onProgress: { completed, total in
+                progress.yield(VaultOpenProgress(phase: .indexing(completed: completed, total: total)))
+            })
 
             await repo.startWatching()
             startWatchingChanges(repo: repo)

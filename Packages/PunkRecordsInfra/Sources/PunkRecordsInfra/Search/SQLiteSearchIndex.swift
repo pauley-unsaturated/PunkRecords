@@ -181,13 +181,27 @@ public actor SQLiteSearchIndex: SearchService {
     }
 
     public func rebuildIndex(documents: [Document]) async throws {
+        try await rebuildIndex(documents: documents, onProgress: nil)
+    }
+
+    /// Like ``rebuildIndex(documents:)``, but reports indexing progress as
+    /// `(completed, total)` so a vault open can show a determinate bar.
+    /// `onProgress` is invoked on this actor: once with `(0, total)` before the
+    /// first note, then after each note is indexed, ending at `(total, total)`.
+    public func rebuildIndex(
+        documents: [Document],
+        onProgress: (@Sendable (Int, Int) -> Void)?
+    ) async throws {
         try await dbPool.write { db in
             try db.execute(sql: "DELETE FROM document_meta")
             try db.execute(sql: "DELETE FROM document_fts")
             try db.execute(sql: "DELETE FROM document_links")
         }
-        for doc in documents {
+        let total = documents.count
+        onProgress?(0, total)
+        for (offset, doc) in documents.enumerated() {
             try await index(document: doc)
+            onProgress?(offset + 1, total)
         }
     }
 

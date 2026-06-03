@@ -9,6 +9,14 @@ struct VaultWindow: View {
     @State private var appState = AppState()
     @Environment(\.dismissWindow) private var dismissWindow
 
+    /// The UI-testing vault is tiny and opens instantly, so the loading overlay
+    /// would only be a sub-frame flash — and a window-covering overlay risks
+    /// racing element queries. Suppress it under `--ui-testing` (same gate the
+    /// `.task` below uses to pick the test vault).
+    private var isUITesting: Bool {
+        ProcessInfo.processInfo.arguments.contains("--ui-testing")
+    }
+
     var body: some View {
         NavigationSplitView {
             VaultBrowserView()
@@ -58,6 +66,13 @@ struct VaultWindow: View {
         )) {
             RefileView()
         }
+        .overlay {
+            if appState.isLoading && !isUITesting {
+                VaultOpenProgressView(progress: appState.openProgress)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: appState.isLoading)
         .environment(appState)
         .navigationTitle(appState.currentVault?.name ?? "PunkRecords")
         .task {
@@ -119,6 +134,41 @@ struct VaultWindow: View {
         } catch {
             appState.errorMessage = "Failed to export: \(error.localizedDescription)"
         }
+    }
+}
+
+// MARK: - Vault Open Progress
+
+/// Centered overlay shown while a vault is opening so a long ingest doesn't
+/// look like a frozen window. Determinate during indexing (a known note
+/// count), indeterminate while reading notes off disk. All display strings and
+/// the fraction come from the unit-tested ``VaultOpenProgress``.
+private struct VaultOpenProgressView: View {
+    let progress: VaultOpenProgress?
+
+    private var label: String { progress?.label ?? "Opening vault…" }
+
+    var body: some View {
+        VStack(spacing: 14) {
+            if let fraction = progress?.fractionCompleted {
+                ProgressView(value: fraction) {
+                    Text(label)
+                }
+                .frame(width: 240)
+            } else {
+                ProgressView {
+                    Text(label)
+                }
+            }
+        }
+        .padding(28)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .shadow(radius: 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.background.opacity(0.6))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("vaultOpenProgress")
+        .accessibilityLabel(label)
     }
 }
 

@@ -37,6 +37,13 @@ public actor FileSystemDocumentRepository: DocumentRepository {
         try listMarkdownFiles(in: vaultRoot, relativeTo: vaultRoot)
     }
 
+    /// Like ``allDocuments()``, but reports the running count of notes read so a
+    /// vault open can show progress. `onProgress` is invoked on this actor as
+    /// each note is loaded — the count is monotonic (1, 2, 3, …).
+    public func allDocuments(onProgress: @escaping @Sendable (Int) -> Void) async throws -> [Document] {
+        try listMarkdownFiles(in: vaultRoot, relativeTo: vaultRoot, onProgress: onProgress)
+    }
+
     public func documentsInFolder(_ path: RelativePath) async throws -> [Document] {
         let folderURL = vaultRoot.appendingPathComponent(path)
         guard FileManager.default.isReadableFile(atPath: folderURL.path) ||
@@ -258,7 +265,11 @@ public actor FileSystemDocumentRepository: DocumentRepository {
         return doc
     }
 
-    private func listMarkdownFiles(in directory: URL, relativeTo root: URL) throws -> [Document] {
+    private func listMarkdownFiles(
+        in directory: URL,
+        relativeTo root: URL,
+        onProgress: (@Sendable (Int) -> Void)? = nil
+    ) throws -> [Document] {
         let fm = FileManager.default
         let standardRoot = root.standardizedFileURL
         guard let enumerator = fm.enumerator(
@@ -283,6 +294,7 @@ public actor FileSystemDocumentRepository: DocumentRepository {
             do {
                 let doc = try readDocument(at: fileURL, relativePath: relativePath)
                 documents.append(doc)
+                onProgress?(documents.count)
             } catch {
                 continue
             }

@@ -91,6 +91,36 @@ struct FileSystemDocumentRepositoryTests {
         #expect(titles.contains("Third"))
     }
 
+    @Test("allDocuments(onProgress:) reports a monotonic running count")
+    func allDocumentsReportsProgress() async throws {
+        let (repo, cleanup) = try makeRepo()
+        defer { cleanup() }
+
+        try await repo.save(makeDocument(title: "First", path: "first.md"))
+        try await repo.save(makeDocument(title: "Second", path: "second.md"))
+        try await repo.save(makeDocument(title: "Third", path: "subfolder/third.md"))
+
+        let recorder = ProgressRecorder<Int>()
+        let all = try await repo.allDocuments(onProgress: { recorder.record($0) })
+
+        #expect(all.count == 3)
+        // One callback per loaded note, counting up. Enumeration order is
+        // unspecified, but the running count is always 1, 2, 3.
+        #expect(recorder.values == [1, 2, 3])
+    }
+
+    @Test("allDocuments(onProgress:) on an empty vault never reports")
+    func allDocumentsProgressEmptyVault() async throws {
+        let (repo, cleanup) = try makeRepo()
+        defer { cleanup() }
+
+        let recorder = ProgressRecorder<Int>()
+        let all = try await repo.allDocuments(onProgress: { recorder.record($0) })
+
+        #expect(all.isEmpty)
+        #expect(recorder.values.isEmpty)
+    }
+
     @Test("documentsInFolder filters correctly")
     func documentsInFolderFilters() async throws {
         let (repo, cleanup) = try makeRepo()
