@@ -9,13 +9,19 @@ struct RawEditorView: View {
     @State private var viewModel: DocumentEditorViewModel?
     @State private var isPreviewing = false
     @AppStorage("editor.emacsKeybindings") private var emacsKeybindings = false
+    @AppStorage("editor.themeID") private var themeID = EditorThemeCatalog.defaultID
 
     var body: some View {
-        Group {
+        // Resolve the user's chosen editor theme (persisted in Settings). The
+        // `.id(themeID)` below rebuilds the editor through the proven makeNSView
+        // path on change, so switching themes applies live without reopening.
+        let theme = EditorThemeCatalog.theme(forID: themeID)
+        return Group {
             if let viewModel {
                 if isPreviewing {
                     MarkdownPreviewView(
                         content: viewModel.document.content,
+                        theme: theme,
                         onOpenNote: { target in openNoteByTitle(target) },
                         onOpenTag: { tag in appState.sidebarFilterQuery = "tag:\(tag)" }
                     )
@@ -60,8 +66,10 @@ struct RawEditorView: View {
                         onTagClick: { tag in
                             appState.sidebarFilterQuery = "tag:\(tag)"
                         },
-                        emacsEnabled: emacsKeybindings
+                        emacsEnabled: emacsKeybindings,
+                        theme: theme
                     )
+                    .id(themeID)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             } else {
