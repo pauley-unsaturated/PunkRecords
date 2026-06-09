@@ -71,6 +71,7 @@ final class AppState {
     private(set) var keychainService = KeychainService()
 
     private var watchTask: Task<Void, Never>?
+    private var localSettingsObserver: NSObjectProtocol?
 
     func openVault(at url: URL) async {
         isLoading = true
@@ -124,7 +125,10 @@ final class AppState {
             let foundation = FoundationModelsProvider()
             await orch.registerProvider(foundation)
 
+            await Self.registerLocalProviders(on: orch)
+
             self.orchestrator = orch
+            observeLocalProviderSettings()
             self.noteCompiler = NoteCompiler(orchestrator: orch, repository: repo)
 
             // Heal any duplicate frontmatter IDs before indexing — duplicates
@@ -283,6 +287,61 @@ final class AppState {
         if let index = searchIndex {
             try? await index.removeFromIndex(documentID: doc.id)
         }
+    }
+
+    // MARK: - Local LLM Providers
+
+    /// Construct Ollama + LM Studio providers from persisted settings and
+    /// register them on the orchestrator.
+    private static func registerLocalProviders(on orchestrator: LLMOrchestrator) async {
+        let ollama = OllamaProvider(
+            endpoint: LocalProviderSettings.endpoint(for: .ollama),
+            modelID: LocalProviderSettings.model(for: .ollama)
+        )
+        await orchestrator.registerProvider(ollama)
+
+        let lmStudio = LMStudioProvider(
+            endpoint: LocalProviderSettings.endpoint(for: .lmStudio),
+            modelID: LocalProviderSettings.model(for: .lmStudio)
+        )
+        await orchestrator.registerProvider(lmStudio)
+    }
+
+    /// Rebuild local providers when their settings change (endpoint edited in
+    /// Settings), so the running orchestrator picks up the new connection
+    /// without an app relaunch.
+    private func observeLocalProviderSettings() {
+        if let existing = localSettingsObserver {
+            NotificationCenter.default.removeObserver(existing)
+        }
+        localSettingsObserver = NotificationCenter.default.addObserver(
+            forName: LocalProviderSettings.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, let orch = self.orchestrator else { return }
+            Task { await Self.registerLocalProviders(on: orch) }
+        }
+    }
+
+    /// Switch the active model for a local provider and persist the choice.
+    func setLocalModel(_ model: String, for providerID: LLMProviderID) async {
+        guard let orch = orchestrator,
+              let provider = await orch.registeredProvider(providerID) as? any LocalModelProvider else { return }
+        await provider.setModel(model)
+        switch providerID {
+        case .ollama: UserDefaults.standard.set(model, forKey: LocalProviderSettings.ollamaModelKey)
+        case .lmStudio: UserDefaults.standard.set(model, forKey: LocalProviderSettings.lmStudioModelKey)
+        default: break
+        }
+    }
+
+    /// Models advertised by a local provider's server right now (empty if
+    /// unreachable). Drives the chat panel's model submenu.
+    func localModels(for providerID: LLMProviderID) async -> [LocalModel] {
+        guard let orch = orchestrator,
+              let provider = await orch.registeredProvider(providerID) as? any LocalModelProvider else { return [] }
+        return (try? await provider.availableModels()) ?? []
     }
 
     // MARK: - Change Watching

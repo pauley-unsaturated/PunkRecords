@@ -9,11 +9,24 @@ struct LLMChatPanel: View {
     @State private var isStreaming = false
     @State private var scope: QueryScope = .global
     @State private var availableProviders: [LLMProviderID] = []
+    @State private var localModels: [LLMProviderID: [LocalModel]] = [:]
+    @State private var isLoadingModels = false
     @AppStorage("webSearchEnabled") private var isWebSearchEnabled = false
     @AppStorage("chatProviderID") private var chatProviderRaw: String = LLMProviderID.anthropic.rawValue
+    @AppStorage(LocalProviderSettings.ollamaModelKey) private var ollamaModel = ""
+    @AppStorage(LocalProviderSettings.lmStudioModelKey) private var lmStudioModel = ""
 
     private var selectedProviderID: LLMProviderID {
         LLMProviderID(rawValue: chatProviderRaw) ?? .anthropic
+    }
+
+    /// The model currently selected for the active local provider (if any).
+    private var selectedLocalModel: String {
+        switch selectedProviderID {
+        case .ollama: return ollamaModel
+        case .lmStudio: return lmStudioModel
+        default: return ""
+        }
     }
 
     var body: some View {
@@ -24,6 +37,9 @@ struct LLMChatPanel: View {
                     .font(.headline)
                 Spacer()
                 providerPicker
+                if selectedProviderID.isLocal {
+                    modelPicker
+                }
                 Toggle("Web", isOn: $isWebSearchEnabled)
                     .toggleStyle(.switch)
                     .controlSize(.mini)
@@ -113,20 +129,58 @@ struct LLMChatPanel: View {
                             Image(systemName: "checkmark")
                         }
                         Text(id.displayName)
-                        if !availableProviders.contains(id) {
+                        if !isSelectable(id) {
                             Text("(not configured)").foregroundStyle(.secondary)
                         }
                     }
                 }
-                .disabled(!availableProviders.contains(id))
+                // Local providers stay selectable even before a model is chosen —
+                // selecting one reveals the model picker, which then makes the
+                // provider available. Cloud providers gate on a configured key.
+                .disabled(!isSelectable(id))
             }
         } label: {
             Label(selectedProviderID.displayName, systemImage: "cpu")
                 .font(.caption)
         }
         .menuStyle(.borderlessButton)
-        .help("Choose the LLM provider for this conversation. \u{2318}1/2/3 to switch.")
+        .help("Choose the LLM provider for this conversation. \u{2318}1–5 to switch.")
         .accessibilityIdentifier("chatProviderPicker")
+    }
+
+    /// Model selector for the active local provider. Lists models advertised by
+    /// the server; selecting one persists the choice and updates the live
+    /// provider so the next message uses it.
+    private var modelPicker: some View {
+        let models = localModels[selectedProviderID] ?? []
+        return Menu {
+            if models.isEmpty {
+                Text(isLoadingModels ? "Loading…" : "No models found")
+            }
+            ForEach(models) { model in
+                Button {
+                    Task { await selectLocalModel(model.id) }
+                } label: {
+                    HStack {
+                        if model.id == selectedLocalModel { Image(systemName: "checkmark") }
+                        Text(model.displayName)
+                    }
+                }
+            }
+            Divider()
+            Button("Refresh", systemImage: "arrow.clockwise") {
+                Task { await refreshLocalModels(force: true) }
+            }
+        } label: {
+            Label(selectedLocalModel.isEmpty ? "Select model" : selectedLocalModel,
+                  systemImage: "shippingbox")
+                .font(.caption)
+                .lineLimit(1)
+        }
+        .menuStyle(.borderlessButton)
+        .help("Choose which local model to run.")
+        .accessibilityIdentifier("chatModelPicker")
+        .task(id: selectedProviderID) { await refreshLocalModels(force: false) }
     }
 
     /// Hidden buttons that own keyboard shortcuts for provider switching.
@@ -137,6 +191,8 @@ struct LLMChatPanel: View {
             providerShortcutButton(.foundationModels, key: "1")
             providerShortcutButton(.anthropic, key: "2")
             providerShortcutButton(.openAI, key: "3")
+            providerShortcutButton(.ollama, key: "4")
+            providerShortcutButton(.lmStudio, key: "5")
         }
         .frame(width: 0, height: 0)
         .hidden()
@@ -144,16 +200,50 @@ struct LLMChatPanel: View {
 
     private func providerShortcutButton(_ id: LLMProviderID, key: KeyEquivalent) -> some View {
         Button(id.displayName) {
-            if availableProviders.contains(id) {
+            if isSelectable(id) {
                 chatProviderRaw = id.rawValue
             }
         }
         .keyboardShortcut(key, modifiers: .command)
     }
 
+    /// Whether a provider can be picked in the UI. Cloud providers require a
+    /// configured key (reported via `availableProviders`); local providers are
+    /// always selectable so the user can reach their model picker.
+    private func isSelectable(_ id: LLMProviderID) -> Bool {
+        id.isLocal || availableProviders.contains(id)
+    }
+
     private func refreshAvailableProviders() async {
         guard let orchestrator = appState.orchestrator else { return }
         availableProviders = await orchestrator.availableProviders()
+    }
+
+    /// Fetch the model list for the active local provider. `force` re-fetches
+    /// even when we already have a cached list.
+    private func refreshLocalModels(force: Bool) async {
+        let id = selectedProviderID
+        guard id.isLocal else { return }
+        if !force, localModels[id]?.isEmpty == false { return }
+        isLoadingModels = true
+        defer { isLoadingModels = false }
+        let models = await appState.localModels(for: id)
+        localModels[id] = models
+        // Auto-select the first model if none chosen yet, so the provider becomes
+        // usable without an extra click.
+        if selectedLocalModel.isEmpty, let first = models.first {
+            await selectLocalModel(first.id)
+        }
+    }
+
+    private func selectLocalModel(_ model: String) async {
+        switch selectedProviderID {
+        case .ollama: ollamaModel = model
+        case .lmStudio: lmStudioModel = model
+        default: return
+        }
+        await appState.setLocalModel(model, for: selectedProviderID)
+        availableProviders = await appState.orchestrator?.availableProviders() ?? availableProviders
     }
 
     private var scopePicker: some View {
@@ -188,6 +278,17 @@ struct LLMChatPanel: View {
 
         guard let orchestrator = appState.orchestrator else {
             messages.append(ChatMessage(role: .assistant, content: "No LLM provider configured. Open Settings to add an API key."))
+            return
+        }
+
+        // A local provider with no model selected would silently fall back to a
+        // cloud provider — surface it instead so the user picks a model.
+        if selectedProviderID.isLocal && selectedLocalModel.isEmpty {
+            messages.append(ChatMessage(
+                role: .assistant,
+                content: "Pick a model for \(selectedProviderID.displayName) first — use the model menu "
+                    + "next to the provider, or Settings ▸ Local LLMs."
+            ))
             return
         }
 
@@ -274,7 +375,13 @@ struct LLMChatPanel: View {
                 case .error(let err):
                     messages.append(ChatMessage(role: .assistant, content: "*Agent error: \(err)*", context: context))
                     currentAssistantIndex = nil
-                case .done, .agentStart, .turnStart, .turnEnd:
+                case .done(_, let stats, _):
+                    // Attach inference metrics to the last assistant bubble so the
+                    // stats footer (local providers) renders under the response.
+                    if let stats, let idx = messages.lastIndex(where: { $0.role == .assistant }) {
+                        messages[idx].stats = stats
+                    }
+                case .agentStart, .turnStart, .turnEnd:
                     break
                 }
             }
@@ -358,6 +465,9 @@ struct ChatMessage: Identifiable {
     /// "via Claude / GPT / Apple" attribution chip and lets future "rerun with
     /// a different model" actions know what to switch *from*.
     var providerID: LLMProviderID? = nil
+    /// For assistant messages from a local provider: inference performance
+    /// metrics, shown in the per-response footer.
+    var stats: InferenceStats? = nil
 
     enum Role {
         case user, assistant, tool
@@ -429,8 +539,57 @@ private struct ChatBubble: View {
                         .help("Capture this turn's context as a bug report")
                     }
                 }
+
+                if let stats = message.stats, stats.hasAnyMetric {
+                    InferenceStatsView(stats: stats)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
+    }
+}
+
+/// Compact one-line footer showing local-LLM inference performance.
+struct InferenceStatsView: View {
+    let stats: InferenceStats
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(metrics, id: \.label) { metric in
+                HStack(spacing: 3) {
+                    Image(systemName: metric.icon)
+                    Text(metric.value)
+                }
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .accessibilityIdentifier("inferenceStats")
+        .help(stats.source == .ollamaNative
+              ? "Server-reported metrics from Ollama"
+              : "Client-measured metrics")
+    }
+
+    private var metrics: [(label: String, icon: String, value: String)] {
+        var out: [(String, String, String)] = []
+        if let ttft = stats.timeToFirstToken {
+            out.append(("ttft", "timer", "TTFT \(Self.formatSeconds(ttft))"))
+        }
+        if let prefill = stats.prefillRate {
+            out.append(("prefill", "arrow.down.to.line", "\(Self.formatRate(prefill)) prefill"))
+        }
+        if let tps = stats.tokensPerSecond {
+            out.append(("tps", "speedometer", "\(Self.formatRate(tps)) tok/s"))
+        }
+        return out
+    }
+
+    static func formatRate(_ value: Double) -> String {
+        String(format: value >= 100 ? "%.0f" : "%.1f", value)
+    }
+
+    static func formatSeconds(_ value: TimeInterval) -> String {
+        if value < 1 { return String(format: "%.0fms", value * 1000) }
+        return String(format: "%.2fs", value)
     }
 }

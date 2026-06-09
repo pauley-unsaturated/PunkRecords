@@ -113,11 +113,19 @@ public struct LLMToolResponse: Sendable {
     public let contentBlocks: [ContentBlock]
     public let stopReason: StopReason
     public let usage: TokenUsage?
+    /// Inference performance metrics, when the provider reports them (local LLMs).
+    public let stats: InferenceStats?
 
-    public init(contentBlocks: [ContentBlock], stopReason: StopReason, usage: TokenUsage?) {
+    public init(
+        contentBlocks: [ContentBlock],
+        stopReason: StopReason,
+        usage: TokenUsage?,
+        stats: InferenceStats? = nil
+    ) {
         self.contentBlocks = contentBlocks
         self.stopReason = stopReason
         self.usage = usage
+        self.stats = stats
     }
 
     public var textContent: String {

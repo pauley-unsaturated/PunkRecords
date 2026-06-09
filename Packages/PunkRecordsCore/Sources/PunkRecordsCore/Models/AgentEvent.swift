@@ -8,7 +8,7 @@ public enum AgentEvent: Sendable {
     case toolStart(name: String, arguments: String)
     case toolEnd(name: String, result: ToolResult)
     case turnEnd(turnIndex: Int)
-    case done(finalText: String)
+    case done(finalText: String, stats: InferenceStats? = nil, usage: TokenUsage? = nil)
     case error(AgentError)
 }
 
