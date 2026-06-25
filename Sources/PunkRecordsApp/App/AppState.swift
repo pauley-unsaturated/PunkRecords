@@ -124,6 +124,11 @@ final class AppState {
             let foundation = FoundationModelsProvider()
             await orch.registerProvider(foundation)
 
+            // Local models via Ollama (through Hugging Face's AnyLanguageModel).
+            // Reports available only when an Ollama server is reachable.
+            let anyLanguageModel = AnyLanguageModelProvider()
+            await orch.registerProvider(anyLanguageModel)
+
             self.orchestrator = orch
             self.noteCompiler = NoteCompiler(orchestrator: orch, repository: repo)
 

@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "PunkRecordsInfra",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS("27.0")],
     products: [
         .library(name: "PunkRecordsInfra", targets: ["PunkRecordsInfra"]),
     ],
@@ -12,6 +12,10 @@ let package = Package(
         .package(path: "../PunkRecordsTestSupport"),
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
         .package(url: "https://github.com/kishikawakatsumi/KeychainAccess.git", from: "4.2.2"),
+        // API-compatible drop-in for Apple's FoundationModels with pluggable
+        // backends (Ollama, MLX, llama.cpp, remote providers). Backs the local
+        // "Ollama" provider; works back to macOS 14, so not gated on macOS 26+.
+        .package(url: "https://github.com/huggingface/AnyLanguageModel", from: "0.8.0"),
         .package(url: "https://github.com/ChimeHQ/Neon.git", branch: "main"),
         .package(url: "https://github.com/ChimeHQ/SwiftTreeSitter.git", branch: "main"),
         .package(url: "https://github.com/tree-sitter-grammars/tree-sitter-markdown.git", from: "0.5.0"),
@@ -44,6 +48,7 @@ let package = Package(
                 "PunkRecordsCore",
                 .product(name: "GRDB", package: "GRDB.swift"),
                 "KeychainAccess",
+                .product(name: "AnyLanguageModel", package: "AnyLanguageModel"),
                 .product(name: "Neon", package: "Neon"),
                 .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
                 .product(name: "TreeSitterMarkdown", package: "tree-sitter-markdown"),
