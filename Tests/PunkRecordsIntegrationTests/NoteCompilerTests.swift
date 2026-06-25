@@ -9,18 +9,9 @@ struct NoteCompilerTests {
         llmResponse: String,
         documents: [Document] = []
     ) async -> (NoteCompiler, MockDocumentRepository) {
-        let mock = MockLLMProvider(capabilities: [], responses: [llmResponse])
-        let search = MockSearchService()
+        let completer = MockTextCompleter(response: llmResponse)
         let repo = MockDocumentRepository(documents: documents)
-        let contextBuilder = ContextBuilder(searchService: search, repository: repo)
-        let orch = LLMOrchestrator(
-            contextBuilder: contextBuilder,
-            defaultProviderID: mock.id,
-            vaultName: "TestVault"
-        )
-        await orch.registerProvider(mock)
-
-        let compiler = NoteCompiler(orchestrator: orch, repository: repo)
+        let compiler = NoteCompiler(completer: completer, repository: repo)
         return (compiler, repo)
     }
 

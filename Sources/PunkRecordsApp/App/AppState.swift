@@ -130,7 +130,10 @@ final class AppState {
             await orch.registerProvider(anyLanguageModel)
 
             self.orchestrator = orch
-            self.noteCompiler = NoteCompiler(orchestrator: orch, repository: repo)
+            self.noteCompiler = NoteCompiler(
+                completer: makeNoteCompleter(provider: vault.settings.defaultLLMProvider, fallback: orch),
+                repository: repo
+            )
 
             // Heal any duplicate frontmatter IDs before indexing — duplicates
             // would otherwise confuse repo.document(withID:) and the backlink map.
@@ -317,6 +320,29 @@ final class AppState {
     var vaultChangeTick: Int = 0
 
     // MARK: - Helpers
+
+    /// Build the ``TextCompleter`` that backs ``NoteCompiler``.
+    ///
+    /// Prefers the session path (``SessionTextCompleter`` over a model from
+    /// ``LanguageModelFactory``) so "save as note" / "compile from source" route
+    /// through the same FoundationModels session machinery as chat. If the
+    /// configured provider's model can't be constructed (e.g. a remote provider
+    /// with no Keychain key), falls back to the legacy orchestrator — which also
+    /// conforms to ``TextCompleter`` — so note compilation never goes dark.
+    private func makeNoteCompleter(
+        provider: LLMProviderID,
+        fallback: LLMOrchestrator
+    ) -> any TextCompleter {
+        do {
+            let model = try LanguageModelFactory.makeModel(
+                for: provider,
+                keychain: keychainService
+            )
+            return SessionTextCompleter(model: model)
+        } catch {
+            return fallback
+        }
+    }
 
     private func pathTitle(for doc: Document) -> String {
         ((doc.path as NSString).lastPathComponent as NSString).deletingPathExtension

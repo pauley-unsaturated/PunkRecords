@@ -3,18 +3,34 @@ import Foundation
 /// Orchestrates LLM-driven note creation: "save as note" from chat responses
 /// and "compile from source" for turning raw material into wiki articles.
 public actor NoteCompiler {
-    private let orchestrator: LLMOrchestrator
+    private let completer: any TextCompleter
     private let repository: any DocumentRepository
     private let parser: MarkdownParser
 
+    /// Designated initializer: depend on the minimal ``TextCompleter`` seam.
+    ///
+    /// The concrete completer is supplied from outside Core — the app injects a
+    /// session-path implementation (Infra), evals/tests inject a mock or the
+    /// legacy orchestrator. Core stays pure.
+    public init(
+        completer: any TextCompleter,
+        repository: any DocumentRepository,
+        parser: MarkdownParser = MarkdownParser()
+    ) {
+        self.completer = completer
+        self.repository = repository
+        self.parser = parser
+    }
+
+    /// Convenience initializer for callers that still hold an ``LLMOrchestrator``
+    /// (legacy path / live evals). The orchestrator conforms to ``TextCompleter``
+    /// via `complete(prompt:)`, so this is a thin forward to the designated init.
     public init(
         orchestrator: LLMOrchestrator,
         repository: any DocumentRepository,
         parser: MarkdownParser = MarkdownParser()
     ) {
-        self.orchestrator = orchestrator
-        self.repository = repository
-        self.parser = parser
+        self.init(completer: orchestrator, repository: repository, parser: parser)
     }
 
     /// Creates a new note from an LLM response. The LLM generates title, tags, and wikilinks.
@@ -50,12 +66,9 @@ public actor NoteCompiler {
         \(responseText)
         """
 
-        let response = try await orchestrator.complete(
-            prompt: structurePrompt,
-            scope: .global
-        )
+        let responseText = try await completer.complete(prompt: structurePrompt)
 
-        var compiledBody = parser.parse(content: response.text, filename: "Untitled").body
+        var compiledBody = parser.parse(content: responseText, filename: "Untitled").body
         compiledBody = appendingMissingCitations(
             to: compiledBody,
             sourceWikilinks: sourceWikilinks,
@@ -159,12 +172,7 @@ public actor NoteCompiler {
         \(sourceContent)
         """
 
-        let response = try await orchestrator.complete(
-            prompt: compilePrompt,
-            scope: .global
-        )
-
-        let compiledContent = response.text
+        let compiledContent = try await completer.complete(prompt: compilePrompt)
         let parsed = parser.parse(content: compiledContent, filename: sourceTitle)
 
         let id = DocumentID()
