@@ -1,6 +1,7 @@
 import SwiftUI
 import MarkdownUI
 import PunkRecordsCore
+import PunkRecordsInfra
 
 struct LLMChatPanel: View {
     @Environment(AppState.self) private var appState
@@ -186,11 +187,6 @@ struct LLMChatPanel: View {
         messages.append(userMessage)
         prompt = ""
 
-        guard let orchestrator = appState.orchestrator else {
-            messages.append(ChatMessage(role: .assistant, content: "No LLM provider configured. Open Settings to add an API key."))
-            return
-        }
-
         // Snapshot the submission context. Attached to the assistant message so
         // "Report Issue" can later reconstruct the full state that produced the response.
         let context = MessageContext(
@@ -203,11 +199,30 @@ struct LLMChatPanel: View {
         )
 
         isStreaming = true
-        await sendAgentMessage(text, orchestrator: orchestrator, context: context)
+        await sendAgentMessage(text, context: context)
         isStreaming = false
     }
 
-    private func sendAgentMessage(_ text: String, orchestrator: LLMOrchestrator, context: MessageContext) async {
+    /// Conservative context-window budget per provider, used to size the
+    /// `ContextBuilder` instructions. Mirrors the `maxContextTokens` defaults of
+    /// the legacy `LLMProvider` implementations so the session path selects the
+    /// same context tier the `AgentLoop` path did.
+    private func contextBudget(for provider: LLMProviderID) -> Int {
+        switch provider {
+        case .foundationModels: return 4_000
+        case .anyLanguageModel: return 8_192
+        case .openAI: return 128_000
+        case .anthropic: return 200_000
+        }
+    }
+
+    /// Produce an `AgentEvent` stream via the FoundationModels session path
+    /// (M2 `SessionAgentRunner` + M3 `LanguageModelFactory` + M4 `buildInstructions`)
+    /// and render it with the SAME event-handling code the panel used for
+    /// `AgentLoop`. Only the *producer* changed: the session now owns the
+    /// agentic tool loop. `AgentLoop` and the legacy providers remain in place
+    /// for other consumers (NoteCompiler / evals) — strangler-fig.
+    private func sendAgentMessage(_ text: String, context: MessageContext) async {
         guard let repository = appState.repository,
               let searchIndex = appState.searchIndex else {
             messages.append(ChatMessage(role: .assistant, content: "Vault not loaded.", context: context))
@@ -215,8 +230,24 @@ struct LLMChatPanel: View {
         }
 
         do {
-            let provider = try await orchestrator.resolveProvider(selectedProviderID)
+            // Resolve the backing model for the selected provider.
+            let model = try LanguageModelFactory.makeModel(
+                for: selectedProviderID,
+                keychain: appState.keychainService
+            )
+
+            // Build instructions (system prompt + tiered vault excerpts) exactly
+            // as the old AgentLoop path did, via the shared ContextBuilder.
             let contextBuilder = ContextBuilder(searchService: searchIndex, repository: repository)
+            let instructions = try await contextBuilder.buildInstructions(
+                prompt: text,
+                scope: scope,
+                currentDocumentID: appState.selectedDocument?.id,
+                maxTokens: contextBudget(for: selectedProviderID),
+                vaultName: appState.currentVault?.name ?? "Vault"
+            )
+
+            // The session owns the tool loop; hand it the same Core AgentTools.
             let tools: [any AgentTool] = [
                 VaultSearchTool(searchService: searchIndex),
                 ReadDocumentTool(repository: repository),
@@ -224,20 +255,21 @@ struct LLMChatPanel: View {
                 ListDocumentsTool(repository: repository),
             ]
 
-            let agentLoop = AgentLoop(
-                provider: provider,
-                contextBuilder: contextBuilder,
-                tools: tools,
-                vaultName: appState.currentVault?.name ?? "Vault"
+            // Fold any selected text into the user prompt, matching AgentLoop.
+            let userPrompt: String
+            if let sel = appState.selectedText, !sel.isEmpty {
+                userPrompt = "Selected text: \(sel)\n\n\(text)"
+            } else {
+                userPrompt = text
+            }
+
+            let runner = SessionAgentRunner(
+                model: model,
+                instructions: instructions,
+                tools: tools
             )
 
-            let stream = await agentLoop.run(
-                prompt: text,
-                scope: scope,
-                currentDocumentID: appState.selectedDocument?.id,
-                selectedText: appState.selectedText,
-                enableWebSearch: isWebSearchEnabled
-            )
+            let stream = await runner.run(prompt: userPrompt)
 
             // Index of the current assistant text bubble being appended to. nil after a tool
             // call, which forces the next textToken to start a fresh bubble — so tool calls
