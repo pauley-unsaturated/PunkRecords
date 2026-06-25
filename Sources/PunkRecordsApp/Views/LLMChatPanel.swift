@@ -10,7 +10,6 @@ struct LLMChatPanel: View {
     @State private var isStreaming = false
     @State private var scope: QueryScope = .global
     @State private var availableProviders: [LLMProviderID] = []
-    @AppStorage("webSearchEnabled") private var isWebSearchEnabled = false
     @AppStorage("chatProviderID") private var chatProviderRaw: String = LLMProviderID.anthropic.rawValue
 
     private var selectedProviderID: LLMProviderID {
@@ -25,10 +24,6 @@ struct LLMChatPanel: View {
                     .font(.headline)
                 Spacer()
                 providerPicker
-                Toggle("Web", isOn: $isWebSearchEnabled)
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .help("Let the AI search the web (Anthropic native web search).")
                 scopePicker
                 Button("Close", systemImage: "xmark.circle.fill") {
                     appState.isChatPanelVisible = false

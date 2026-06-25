@@ -26,7 +26,6 @@ struct SettingsView: View {
 
 private struct GeneralSettingsTab: View {
     @AppStorage("chatProviderID") private var chatProviderRaw = LLMProviderID.anthropic.rawValue
-    @AppStorage("webSearchEnabled") private var webSearchEnabled = false
 
     var body: some View {
         Form {
@@ -36,8 +35,6 @@ private struct GeneralSettingsTab: View {
                         Text(id.displayName).tag(id.rawValue)
                     }
                 }
-                Toggle("Enable web search in chat", isOn: $webSearchEnabled)
-                    .help("Lets the assistant fetch and cite web pages when a provider supports it.")
             }
         }
         .formStyle(.grouped)
