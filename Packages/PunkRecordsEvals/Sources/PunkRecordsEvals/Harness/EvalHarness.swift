@@ -1,5 +1,7 @@
+import AnyLanguageModel
 import Foundation
 import PunkRecordsCore
+import PunkRecordsInfra
 import PunkRecordsTestSupport
 
 /// Runs eval scenarios against the agent loop and produces scored results.
@@ -72,6 +74,144 @@ public struct EvalHarness: Sendable {
             failureReasons: failures,
             finalOutput: finalText
         )
+    }
+
+    // MARK: - Session path (SessionAgentRunner)
+
+    /// Run a scenario against the **session path** (``SessionAgentRunner`` driving
+    /// an AnyLanguageModel `LanguageModelSession`) with a scripted, no-network
+    /// model. This is the strangler-fig replacement for ``runMock`` — instead of
+    /// feeding `LLMToolResponse`s into the legacy `AgentLoop`, it replays a
+    /// ``ScriptedLanguageModel`` so the *session* owns the tool loop and
+    /// `SessionAgentRunner` translates events.
+    ///
+    /// The vault, tools, instructions, and ground-truth evaluation are identical
+    /// to ``runMock``; only the execution engine differs. Because the session path
+    /// emits a single logical agent invocation (no per-turn boundaries), metrics
+    /// collapse the run into one synthesized turn carrying every tool call.
+    public func runMockSession(
+        scenario: EvalScenario,
+        script: [ScriptedLanguageModel.Step],
+        variant: PromptVariant? = nil
+    ) async throws -> ScenarioResult {
+        let model = ScriptedLanguageModel(script: script)
+        return try await runSession(scenario: scenario, model: model, variant: variant)
+    }
+
+    /// Run a scenario against the session path with a real, injected
+    /// `LanguageModel` (e.g. from `LanguageModelFactory.makeModel`). Slow/costly —
+    /// the session-path analogue of ``runLive``.
+    public func runLiveSession(
+        scenario: EvalScenario,
+        model: any LanguageModel,
+        variant: PromptVariant? = nil
+    ) async throws -> ScenarioResult {
+        try await runSession(scenario: scenario, model: model, variant: variant)
+    }
+
+    /// Shared session-path driver: seed the mock vault, build tools + instructions,
+    /// drive ``SessionAgentRunner``, collect ``AgentEvent``s into ``TaskMetrics``,
+    /// then score against ground truth (same evaluator as the AgentLoop path).
+    private func runSession(
+        scenario: EvalScenario,
+        model: any LanguageModel,
+        variant: PromptVariant?
+    ) async throws -> ScenarioResult {
+        let mockRepo = MockDocumentRepository()
+        let mockSearch = MockSearchService()
+
+        for doc in scenario.vaultDocuments {
+            try await mockRepo.save(doc)
+        }
+        await mockSearch.setQueryResults(scenario.queryResultMap)
+        await mockSearch.setBacklinkMap(scenario.backlinkMap)
+
+        let contextBuilder = ContextBuilder(searchService: mockSearch, repository: mockRepo)
+        let tools: [any AgentTool] = [
+            VaultSearchTool(searchService: mockSearch),
+            ReadDocumentTool(repository: mockRepo),
+            CreateNoteTool(repository: mockRepo),
+            ListDocumentsTool(repository: mockRepo),
+        ]
+
+        // The session takes the assembled context as its instructions — the same
+        // string the chat UI builds via `ContextBuilder.buildInstructions`.
+        let instructions = try await contextBuilder.buildInstructions(
+            prompt: scenario.userPrompt,
+            scope: scenario.scope,
+            currentDocumentID: scenario.currentDocumentID,
+            maxTokens: 128_000,
+            vaultName: "Eval Vault",
+            systemPromptTemplate: variant?.template
+        )
+
+        let runner = SessionAgentRunner(
+            model: model,
+            instructions: instructions,
+            tools: tools
+        )
+
+        let stream = await runner.run(prompt: scenario.userPrompt)
+        let (metrics, finalText) = try await Self.collectSessionMetrics(
+            from: stream,
+            scenarioID: scenario.id
+        )
+
+        let failures = evaluate(
+            output: finalText,
+            metrics: metrics,
+            groundTruth: scenario.groundTruth,
+            repository: mockRepo
+        )
+
+        let success = failures.isEmpty && metrics.success
+        return ScenarioResult(
+            scenarioID: scenario.id,
+            scenarioName: scenario.name,
+            success: success,
+            metrics: metrics,
+            failureReasons: failures,
+            finalOutput: finalText
+        )
+    }
+
+    /// Collect a session-path ``AgentEvent`` stream into ``TaskMetrics``.
+    ///
+    /// The session path has no per-turn boundaries (the session, not us, owns the
+    /// loop), so we synthesize exactly one ``TurnMetrics`` that carries every tool
+    /// call observed. That yields `turnCount == 1` and `toolCallCount == observed`,
+    /// matching the ground-truth ranges the scenarios assert.
+    static func collectSessionMetrics(
+        from stream: AsyncThrowingStream<AgentEvent, Error>,
+        scenarioID: String
+    ) async throws -> (TaskMetrics, String) {
+        var finalText = ""
+        var toolCalls: [ToolCallRecord] = []
+        var success = true
+
+        for try await event in stream {
+            switch event {
+            case .textToken(let token):
+                finalText += token
+            case .toolEnd(let name, let result):
+                toolCalls.append(ToolCallRecord(toolName: name, latencyMS: 0, isError: result.isError))
+            case .done(let text):
+                if finalText.isEmpty { finalText = text }
+            case .error(let err):
+                switch err {
+                case .cancelled, .maxIterationsExceeded:
+                    success = false
+                default:
+                    success = false
+                }
+            case .agentStart, .turnStart, .toolStart, .turnEnd:
+                break
+            }
+        }
+
+        let turn = TurnMetrics(turnIndex: 0, tokens: .zero, latencyMS: 0, toolCalls: toolCalls)
+        let metrics = TaskMetrics(scenarioID: scenarioID, turns: [turn], success: success)
+        return (metrics, finalText)
     }
 
     /// Run a scenario with a live provider (slow, costly, real metrics).
