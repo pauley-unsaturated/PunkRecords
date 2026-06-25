@@ -81,6 +81,35 @@ public actor ContextBuilder {
         return (systemPrompt, excerpts)
     }
 
+    /// Builds the assembled context as a SINGLE instructions string for the
+    /// session path (e.g. `LanguageModelSession(instructions:)`), reusing the
+    /// exact tiered selection and token budgeting of ``buildContext(prompt:scope:currentDocumentID:maxTokens:vaultName:systemPromptTemplate:)``.
+    ///
+    /// The returned string is the system prompt followed by the selected
+    /// document excerpts rendered in wiki-link form. Stays pure Core — no
+    /// FoundationModels import.
+    public func buildInstructions(
+        prompt: String,
+        scope: QueryScope,
+        currentDocumentID: DocumentID?,
+        maxTokens: Int,
+        vaultName: String,
+        systemPromptTemplate: String? = nil
+    ) async throws -> String {
+        let (systemPrompt, _) = try await buildContext(
+            prompt: prompt,
+            scope: scope,
+            currentDocumentID: currentDocumentID,
+            maxTokens: maxTokens,
+            vaultName: vaultName,
+            systemPromptTemplate: systemPromptTemplate
+        )
+        // `buildContext` already folds the selected excerpts into `systemPrompt`
+        // (see `buildSystemPrompt` / `buildSystemPromptFromTemplate`), so the
+        // returned prompt is the fully-assembled instructions string.
+        return systemPrompt
+    }
+
     // MARK: - Small Context (< 4k)
 
     private func buildSmallContext(
