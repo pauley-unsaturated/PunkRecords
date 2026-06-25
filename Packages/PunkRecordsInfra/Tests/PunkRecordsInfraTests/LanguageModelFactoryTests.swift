@@ -54,15 +54,45 @@ struct LanguageModelFactoryTests {
         #expect(ollama.baseURL.port == 9999)
     }
 
-    @Test(".anthropic falls back to a model rather than throwing (known limitation)")
-    func anthropicFallsBack() throws {
-        // ClaudeForFoundationModels is not yet wired (see TODO in the factory):
-        // .anthropic must still produce a usable model, not throw.
+    @Test(".anthropic builds a remote Claude model when a key is present")
+    func anthropicBuildsWithKey() throws {
+        // .anthropic now maps to AnyLanguageModel's remote AnthropicLanguageModel
+        // (not the on-device fallback). With a stored key it must construct without
+        // throwing; building the value is local and makes no network call.
+        let keychain = makeKeychain()
+        try keychain.setAPIKey("sk-ant-test-key", for: "anthropic")
+        defer { try? keychain.removeAPIKey(for: "anthropic") }
+
         let model = try LanguageModelFactory.makeModel(
             for: .anthropic,
-            keychain: makeKeychain()
+            keychain: keychain
         )
-        _ = model.isAvailable
+        let anthropic = try #require(model as? AnthropicLanguageModel)
+        #expect(anthropic.model == "claude-sonnet-4-6")
+    }
+
+    @Test(".anthropic honours a custom Claude model id from config")
+    func anthropicHonoursConfig() throws {
+        let keychain = makeKeychain()
+        try keychain.setAPIKey("sk-ant-test-key", for: "anthropic")
+        defer { try? keychain.removeAPIKey(for: "anthropic") }
+
+        let config = LanguageModelFactory.Config(claudeModel: "claude-3-5-sonnet-20241022")
+        let model = try LanguageModelFactory.makeModel(
+            for: .anthropic,
+            keychain: keychain,
+            config: config
+        )
+        let anthropic = try #require(model as? AnthropicLanguageModel)
+        #expect(anthropic.model == "claude-3-5-sonnet-20241022")
+    }
+
+    @Test(".anthropic throws missingAPIKey when no key is stored")
+    func anthropicMissingKeyThrows() {
+        let keychain = makeKeychain()
+        #expect(throws: LanguageModelFactory.FactoryError.missingAPIKey(provider: "anthropic")) {
+            _ = try LanguageModelFactory.makeModel(for: .anthropic, keychain: keychain)
+        }
     }
 
     @Test(".openAI throws missingAPIKey when no key is stored")

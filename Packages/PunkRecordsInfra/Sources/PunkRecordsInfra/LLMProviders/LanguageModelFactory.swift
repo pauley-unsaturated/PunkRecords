@@ -24,18 +24,24 @@ import PunkRecordsCore
 /// | `.anyLanguageModel`  | `OllamaLanguageModel` (default `qwen3` @ localhost) |
 /// | `.openAI`            | `OpenAILanguageModel`, key from Keychain `"openai"` |
 /// | `.foundationModels`  | ALM `SystemLanguageModel` (macOS 26+ on-device)     |
-/// | `.anthropic`         | *fallback* — see the `.anthropic` note below        |
+/// | `.anthropic`         | `AnthropicLanguageModel`, key from Keychain `"anthropic"` |
 ///
-/// ## `.anthropic` — known limitation
-/// Anthropic's `ClaudeForFoundationModels` (`ClaudeLanguageModel`) conforms to the
-/// **system** `FoundationModels.LanguageModel` protocol (the macOS 26+ executor
-/// model), which is structurally *different* from AnyLanguageModel's
-/// `LanguageModel` and therefore cannot be returned through this factory's
-/// `any AnyLanguageModel.LanguageModel` type — nor driven by AnyLanguageModel's
-/// `LanguageModelSession`. Wiring it requires a parallel session path on
-/// `FoundationModels.LanguageModelSession`, which is a separate workflow. Until
-/// then `.anthropic` falls back to the on-device `SystemLanguageModel` so the
-/// factory stays total and green.
+/// ## `.anthropic` — backend choice
+/// `.anthropic` uses AnyLanguageModel's **remote** `AnthropicLanguageModel`, which
+/// talks to Claude's Messages API and conforms to *this* factory's
+/// `any AnyLanguageModel.LanguageModel` protocol — so it is driven by the same
+/// `LanguageModelSession`/`SessionAgentRunner` tool loop as every other backend,
+/// with no parallel session path.
+///
+/// We deliberately do **not** use Anthropic's official `ClaudeForFoundationModels`
+/// (`ClaudeLanguageModel`) here. That type conforms to the *system*
+/// `FoundationModels.LanguageModel` protocol (the macOS 26+ executor model) and
+/// can offer server-side tools / Private Cloud Compute, but it is structurally
+/// *different* from AnyLanguageModel's `LanguageModel` and would require a parallel
+/// `FoundationModels.LanguageModelSession` driver. Keeping `.anthropic` on the
+/// AnyLanguageModel-native remote backend means every provider shares one unified
+/// session path. The system-protocol `ClaudeForFoundationModels` remains a
+/// deliberate future option, not used here.
 public enum LanguageModelFactory {
 
     /// Optional per-call configuration. Defaults match the existing providers.
@@ -46,15 +52,20 @@ public enum LanguageModelFactory {
         public var ollamaEndpoint: URL
         /// Model identifier for the OpenAI backend (`.openAI`).
         public var openAIModel: String
+        /// Model identifier for the Anthropic backend (`.anthropic`). Defaults to
+        /// the same Claude model the legacy `AnthropicProvider` uses.
+        public var claudeModel: String
 
         public init(
             ollamaModel: String = "qwen3",
             ollamaEndpoint: URL = URL(string: "http://localhost:11434")!,
-            openAIModel: String = "gpt-4o"
+            openAIModel: String = "gpt-4o",
+            claudeModel: String = "claude-sonnet-4-6"
         ) {
             self.ollamaModel = ollamaModel
             self.ollamaEndpoint = ollamaEndpoint
             self.openAIModel = openAIModel
+            self.claudeModel = claudeModel
         }
     }
 
@@ -93,13 +104,18 @@ public enum LanguageModelFactory {
             return makeSystemLanguageModel()
 
         case .anthropic:
-            // TODO(PUNK): wire ClaudeForFoundationModels (ClaudeLanguageModel) once
-            // there is a FoundationModels.LanguageModelSession-based driver. It
-            // conforms to the system FoundationModels.LanguageModel protocol, which
-            // is incompatible with this factory's AnyLanguageModel.LanguageModel
-            // return type and AnyLanguageModel's session path. Falling back to the
-            // on-device model keeps the factory total until that path exists.
-            return makeSystemLanguageModel()
+            // AnyLanguageModel's remote Anthropic backend: conforms to this
+            // factory's `any AnyLanguageModel.LanguageModel` and is driven by the
+            // same `LanguageModelSession`/`SessionAgentRunner` tool loop as every
+            // other provider. We intentionally do NOT use Anthropic's official
+            // `ClaudeForFoundationModels` (`ClaudeLanguageModel`), which conforms to
+            // the *system* FoundationModels.LanguageModel protocol and could add
+            // server-side tools / Private Cloud Compute — that would force a
+            // parallel FoundationModels.LanguageModelSession driver and split the
+            // session path. Keeping one unified session path is the deliberate
+            // choice; the system-protocol backend stays a future option.
+            let key = try requireKey(from: keychain, provider: "anthropic")
+            return AnthropicLanguageModel(apiKey: key, model: config.claudeModel)
         }
     }
 
