@@ -11,9 +11,20 @@ struct LLMChatPanel: View {
     @State private var scope: QueryScope = .global
     @State private var availableProviders: [LLMProviderID] = []
     @AppStorage("chatProviderID") private var chatProviderRaw: String = LLMProviderID.anthropic.rawValue
+    @AppStorage("ollama.model") private var ollamaModel = "qwen3"
+    @AppStorage("ollama.baseURL") private var ollamaBaseURL = "http://localhost:11434"
 
     private var selectedProviderID: LLMProviderID {
         LLMProviderID(rawValue: chatProviderRaw) ?? .anthropic
+    }
+
+    /// Local-model config (Ollama endpoint + model) sourced from Settings, used
+    /// both to decide availability and to build the backing model for a turn.
+    private var factoryConfig: LanguageModelFactory.Config {
+        LanguageModelFactory.Config(
+            ollamaModel: ollamaModel.isEmpty ? "qwen3" : ollamaModel,
+            ollamaEndpoint: URL(string: ollamaBaseURL) ?? URL(string: "http://localhost:11434")!
+        )
     }
 
     var body: some View {
@@ -148,8 +159,13 @@ struct LLMChatPanel: View {
     }
 
     private func refreshAvailableProviders() async {
-        guard let orchestrator = appState.orchestrator else { return }
-        availableProviders = await orchestrator.availableProviders()
+        // Availability follows the SESSION path (LanguageModelFactory), not the
+        // legacy orchestrator: a provider is selectable when the factory can
+        // actually build and use it (key stored / Ollama reachable / on-device ready).
+        availableProviders = await LanguageModelFactory.availableProviders(
+            keychain: appState.keychainService,
+            config: factoryConfig
+        )
     }
 
     private var scopePicker: some View {
@@ -228,7 +244,8 @@ struct LLMChatPanel: View {
             // Resolve the backing model for the selected provider.
             let model = try LanguageModelFactory.makeModel(
                 for: selectedProviderID,
-                keychain: appState.keychainService
+                keychain: appState.keychainService,
+                config: factoryConfig
             )
 
             // Build instructions (system prompt + tiered vault excerpts) exactly

@@ -119,6 +119,68 @@ public enum LanguageModelFactory {
         }
     }
 
+    // MARK: - Availability
+
+    /// The providers this factory can currently build a usable model for — i.e.
+    /// the ones the chat UI should leave selectable. This reflects the SESSION
+    /// path (not the legacy `LLMOrchestrator`): a remote provider is available
+    /// when its API key is stored, the local Ollama provider when its server
+    /// answers, and the on-device provider when Apple reports the model ready.
+    public static func availableProviders(
+        keychain: KeychainService,
+        config: Config = Config()
+    ) async -> [LLMProviderID] {
+        var result: [LLMProviderID] = []
+        for provider in LLMProviderID.allCases where await isAvailable(provider, keychain: keychain, config: config) {
+            result.append(provider)
+        }
+        return result
+    }
+
+    /// Whether `provider` can be constructed and used right now.
+    public static func isAvailable(
+        _ provider: LLMProviderID,
+        keychain: KeychainService,
+        config: Config = Config()
+    ) async -> Bool {
+        switch provider {
+        case .anyLanguageModel:
+            return await ollamaReachable(config.ollamaEndpoint)
+        case .openAI:
+            return hasKey(keychain, "openai")
+        case .anthropic:
+            return hasKey(keychain, "anthropic")
+        case .foundationModels:
+            return systemModelAvailable()
+        }
+    }
+
+    private static func hasKey(_ keychain: KeychainService, _ provider: String) -> Bool {
+        ((try? keychain.apiKey(for: provider)) ?? nil)?.isEmpty == false
+    }
+
+    /// Probe the Ollama server's `/api/tags` with a short timeout. Any reachable
+    /// HTTP response (even an error status) means the daemon is up.
+    private static func ollamaReachable(_ endpoint: URL) async -> Bool {
+        var request = URLRequest(url: endpoint.appendingPathComponent("/api/tags"))
+        request.httpMethod = "GET"
+        request.timeoutInterval = 1.5
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { return false }
+            return (200..<500).contains(http.statusCode)
+        } catch {
+            return false
+        }
+    }
+
+    /// Whether Apple's on-device system model reports itself ready (Apple
+    /// Intelligence enabled and the model downloaded).
+    private static func systemModelAvailable() -> Bool {
+        if case .available = SystemLanguageModel().availability { return true }
+        return false
+    }
+
     // MARK: - Helpers
 
     /// ALM's `SystemLanguageModel` bridges to Apple's on-device FoundationModels

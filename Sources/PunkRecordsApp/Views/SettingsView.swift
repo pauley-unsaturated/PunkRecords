@@ -18,7 +18,7 @@ struct SettingsView: View {
                 KeyboardSettingsTab()
             }
         }
-        .frame(width: 520, height: 340)
+        .frame(width: 520, height: 440)
     }
 }
 
@@ -48,11 +48,26 @@ private struct ProvidersSettingsTab: View {
     @State private var openAIKey = ""
     @State private var openAIBaseURL = "https://api.openai.com/v1"
     @State private var showSaveConfirmation = false
+    // Local-model config persists immediately (no key to store), so it lives in
+    // AppStorage and is shared with the chat panel via the same keys.
+    @AppStorage("ollama.model") private var ollamaModel = "qwen3"
+    @AppStorage("ollama.baseURL") private var ollamaBaseURL = "http://localhost:11434"
     private let keychainService = KeychainService()
 
     var body: some View {
         Form {
-            Section("Anthropic") {
+            Section("Local — Ollama (on-device, no key)") {
+                TextField("Model", text: $ollamaModel)
+                    .help("Ollama model name. qwen3 has the most reliable tool calling; "
+                        + "gemma4 also works. Run `ollama pull <model>` first.")
+                TextField("Server URL", text: $ollamaBaseURL)
+                    .help("Default http://localhost:11434. Start the server with `ollama serve`.")
+                Text("The provider lights up in chat once the Ollama server is reachable.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Claude — Anthropic") {
                 SecureField("API Key", text: $anthropicKey)
                     .onAppear {
                         anthropicKey = (try? keychainService.apiKey(for: "anthropic")) ?? ""
@@ -68,8 +83,15 @@ private struct ProvidersSettingsTab: View {
                     .help("Use http://localhost:11434/v1 for Ollama, http://localhost:1234/v1 for LM Studio")
             }
 
+            Section("Apple Intelligence — on-device") {
+                Text("Uses the built-in SystemLanguageModel. Available automatically when "
+                    + "Apple Intelligence is enabled and the model has downloaded — no key needed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section {
-                Button("Save") {
+                Button("Save API Keys") {
                     saveKeys()
                     showSaveConfirmation = true
                 }

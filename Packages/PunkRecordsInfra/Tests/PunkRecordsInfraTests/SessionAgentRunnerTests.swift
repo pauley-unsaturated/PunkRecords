@@ -221,4 +221,134 @@ struct SessionAgentRunnerTests {
         let data = try JSONEncoder().encode(adapter.parameters)
         #expect(!data.isEmpty)
     }
+
+    // MARK: - Agentic loop (multi-round `respond`)
+
+    @Test("Loop: a tool round then an answer round fires tool events and emits the final answer")
+    func multiRoundAgenticLoop() async throws {
+        let stub = StubTool(name: "vault_search", result: ToolResult(content: "found 3 notes"))
+        let model = RoundScriptedLanguageModel(rounds: [
+            .callTool(name: "vault_search"),
+            .answer("Here are your notes."),
+        ])
+        let runner = SessionAgentRunner(model: model, instructions: "sys", tools: [stub])
+
+        var events: [AgentEvent] = []
+        for try await event in await runner.run(prompt: "find my notes") {
+            events.append(event)
+        }
+
+        let firedStart = events.contains { if case .toolStart(let n, _) = $0 { return n == "vault_search" } else { return false } }
+        let firedEnd = events.contains { if case .toolEnd(let n, _) = $0 { return n == "vault_search" } else { return false } }
+        #expect(firedStart, "tool round should emit .toolStart")
+        #expect(firedEnd, "tool round should emit .toolEnd")
+
+        let answered = events.contains { if case .textToken(let t) = $0 { return t == "Here are your notes." } else { return false } }
+        #expect(answered, "the answer round's text should be emitted")
+
+        guard case .done(let final)? = events.last(where: { if case .done = $0 { return true } else { return false } }) else {
+            Issue.record("expected a terminal .done event"); return
+        }
+        #expect(final == "Here are your notes.")
+
+        // Tool round must precede the answer (search → synthesize).
+        let startIdx = events.firstIndex { if case .toolStart = $0 { return true } else { return false } }
+        let textIdx = events.firstIndex { if case .textToken = $0 { return true } else { return false } }
+        #expect(startIdx != nil && textIdx != nil && startIdx! < textIdx!)
+    }
+
+    @Test("Loop: a direct answer with no tools emits once and finishes")
+    func directAnswerNoTools() async throws {
+        let model = RoundScriptedLanguageModel(rounds: [.answer("42")])
+        let runner = SessionAgentRunner(model: model, instructions: "sys", tools: [])
+        var texts: [String] = []
+        var sawTool = false
+        for try await event in await runner.run(prompt: "q") {
+            if case .textToken(let t) = event { texts.append(t) }
+            if case .toolStart = event { sawTool = true }
+        }
+        #expect(sawTool == false)
+        #expect(texts == ["42"])
+    }
+}
+
+// MARK: - Round-based scripted model (Ollama-faithful: one model round per `respond`)
+
+/// A deterministic, no-network model whose `respond` returns ONE round at a time —
+/// faithful to `OllamaLanguageModel`, where a tool-call turn yields empty content
+/// (and fires the tools) and a later turn yields the final text. This exercises
+/// `SessionAgentRunner`'s real multi-round loop, unlike the eval-package
+/// `ScriptedLanguageModel` which plays its whole script in a single call.
+private struct RoundScriptedLanguageModel: AnyLanguageModel.LanguageModel {
+    typealias UnavailableReason = Never
+
+    enum Round: Sendable {
+        case callTool(name: String)
+        case answer(String)
+    }
+
+    let rounds: [Round]
+    private let cursor = RoundCursor()
+
+    func respond<Content>(
+        within session: LanguageModelSession,
+        to prompt: Prompt,
+        generating type: Content.Type,
+        includeSchemaInPrompt: Bool,
+        options: GenerationOptions
+    ) async throws -> LanguageModelSession.Response<Content> where Content: Generable {
+        let index = await cursor.next()
+        let round = rounds[min(index, rounds.count - 1)]
+        switch round {
+        case let .callTool(name):
+            if let tool = session.tools.first(where: { $0.name == name }) {
+                let args = GeneratedContent(
+                    kind: .structure(properties: ["query": GeneratedContent("notes")], orderedKeys: ["query"])
+                )
+                try await invokeSessionTool(tool, with: args)
+            }
+            // Empty content => the runner treats this as a tool-only round and continues.
+            return try Self.response("", as: type)
+        case let .answer(text):
+            return try Self.response(text, as: type)
+        }
+    }
+
+    func streamResponse<Content>(
+        within session: LanguageModelSession,
+        to prompt: Prompt,
+        generating type: Content.Type,
+        includeSchemaInPrompt: Bool,
+        options: GenerationOptions
+    ) -> sending LanguageModelSession.ResponseStream<Content> where Content: Generable {
+        // The loop uses `respond`, not streaming; a trivial empty stream suffices.
+        let stream = AsyncThrowingStream<LanguageModelSession.ResponseStream<Content>.Snapshot, any Error> { $0.finish() }
+        return LanguageModelSession.ResponseStream(stream: stream)
+    }
+
+    private static func response<Content>(
+        _ text: String,
+        as type: Content.Type
+    ) throws -> LanguageModelSession.Response<Content> where Content: Generable {
+        if let content = text as? Content {
+            return LanguageModelSession.Response(content: content, rawContent: GeneratedContent(text), transcriptEntries: [])
+        }
+        let generated = GeneratedContent(text)
+        return LanguageModelSession.Response(content: try type.init(generated), rawContent: generated, transcriptEntries: [])
+    }
+}
+
+/// Serializes the round counter across `respond` calls (the session shares one
+/// boxed model instance, so the actor reference is shared across copies).
+private actor RoundCursor {
+    private var index = 0
+    func next() -> Int { defer { index += 1 }; return index }
+}
+
+/// Open an `any Tool` existential to call it with `GeneratedContent` arguments
+/// (every session tool here is built by `SessionAgentRunner`, pinning
+/// `Arguments == GeneratedContent`).
+private func invokeSessionTool<T: AnyLanguageModel.Tool>(_ tool: T, with arguments: GeneratedContent) async throws {
+    guard let typed = arguments as? T.Arguments else { return }
+    _ = try await tool.call(arguments: typed)
 }

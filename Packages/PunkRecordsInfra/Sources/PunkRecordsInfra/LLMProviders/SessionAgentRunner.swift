@@ -82,17 +82,30 @@ public actor SessionAgentRunner {
                         instructions: instructions
                     )
 
-                    // Snapshots are CUMULATIVE — diff to incremental deltas.
-                    var tracker = SnapshotDeltaTracker()
-                    for try await snapshot in session.streamResponse(to: prompt, options: options) {
+                    // AnyLanguageModel's session runs a SINGLE model round per
+                    // `respond`: it executes any tools the model requests (firing our
+                    // adapter's .toolStart/.toolEnd) but does NOT loop back for a final
+                    // answer — and `streamResponse` drops tool calls entirely. So the
+                    // agentic loop lives here. A round that returns empty content means
+                    // the model only called tools (Ollama emits no text on a tool-call
+                    // turn); we nudge it to synthesize from the tool results now in the
+                    // session transcript and ask again. The first non-empty answer — or
+                    // the round cap — ends the loop.
+                    var finalText = ""
+                    var nextPrompt = prompt
+                    for _ in 0..<Self.maxToolRounds {
                         try Task.checkCancellation()
-                        let delta = tracker.delta(for: snapshot.content)
-                        if !delta.isEmpty {
-                            continuation.yield(.textToken(delta))
+                        let response = try await session.respond(to: nextPrompt, options: options)
+                        let text = response.content
+                        if !text.isEmpty {
+                            continuation.yield(.textToken(text))
+                            finalText = text
+                            break
                         }
+                        nextPrompt = Self.continuationPrompt
                     }
 
-                    continuation.yield(.done(finalText: tracker.emitted))
+                    continuation.yield(.done(finalText: finalText))
                     continuation.finish()
                 } catch is CancellationError {
                     continuation.yield(.error(.cancelled))
@@ -106,6 +119,16 @@ public actor SessionAgentRunner {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
+
+    /// Maximum number of model rounds (tool turns plus the final answer) before the
+    /// loop gives up — bounds pathological or looping tool use.
+    static let maxToolRounds = 8
+
+    /// Sent after a tool-only round to ask the model to synthesize a final answer
+    /// from the tool results now in the session transcript (it may call more tools).
+    static let continuationPrompt =
+        "Continue. Use the tool results above to answer the user's request; "
+        + "call additional tools only if you still need more information."
 
     // MARK: - Error mapping
 
