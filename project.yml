@@ -136,11 +136,13 @@ schemes:
       executable: PunkRecordsApp
     test:
       config: Debug
-      targets:
-        - PunkRecordsIntegrationTests
-        - PunkRecordsPromptEvals
-        - PunkRecordsEvalTests
-        - PunkRecordsUITests
+      # Test execution is driven by PunkRecords.xctestplan (kept at repo root so it
+      # survives `xcodegen generate`, which regenerates the gitignored .xcodeproj).
+      # The plan runs Integration + Eval + UI tests and disables PromptEvals, which
+      # needs an API key. build.targets above still compiles every test target.
+      testPlans:
+        - path: PunkRecords.xctestplan
+          defaultPlan: true
     profile:
       config: Release
     analyze:

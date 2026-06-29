@@ -1,0 +1,55 @@
+{
+  "configurations" : [
+    {
+      "id" : "72735540-D6C2-4BA6-81BA-3E539F187A69",
+      "name" : "Configuration 1",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "codeCoverage" : false,
+    "performanceAntipatternCheckerEnabled" : true,
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:PunkRecords.xcodeproj",
+      "identifier" : "446B5E952F21FC3D0D72F9C7",
+      "name" : "PunkRecordsApp"
+    }
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : false,
+      "target" : {
+        "containerPath" : "container:PunkRecords.xcodeproj",
+        "identifier" : "4C65C9A330F431EBD96D7209",
+        "name" : "PunkRecordsIntegrationTests"
+      }
+    },
+    {
+      "enabled" : false,
+      "parallelizable" : false,
+      "target" : {
+        "containerPath" : "container:PunkRecords.xcodeproj",
+        "identifier" : "5A2C893503010322C3C7DF74",
+        "name" : "PunkRecordsPromptEvals"
+      }
+    },
+    {
+      "parallelizable" : false,
+      "target" : {
+        "containerPath" : "container:PunkRecords.xcodeproj",
+        "identifier" : "56FE1430AAB6584E11805D7A",
+        "name" : "PunkRecordsEvalTests"
+      }
+    },
+    {
+      "target" : {
+        "containerPath" : "container:PunkRecords.xcodeproj",
+        "identifier" : "ED493E3E9F4E01D5303E47F2",
+        "name" : "PunkRecordsUITests"
+      }
+    }
+  ],
+  "version" : 1
+}
