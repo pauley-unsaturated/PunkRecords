@@ -67,42 +67,47 @@ public actor SessionAgentRunner {
                 do {
                     continuation.yield(.agentStart)
 
-                    // Wrap each Core tool so its execution emits .toolStart /
-                    // .toolEnd into this stream. The continuation is Sendable, so
-                    // it is safe to capture across the session's isolation.
+                    // Capture each tool's output so we can thread it into the NEXT
+                    // round's prompt. This is load-bearing: AnyLanguageModel's Ollama
+                    // backend is stateless — every `respond` sends only the latest
+                    // prompt (no system/instructions, no history, no tool outputs) — so
+                    // the loop must carry context forward itself.
+                    let toolLog = ToolResultLog()
                     let wrappedTools: [any AnyLanguageModel.Tool] = try tools.map { tool in
                         try EventEmittingToolAdapter(wrapping: tool) { event in
+                            if case .toolEnd(let name, let result) = event {
+                                toolLog.append(name: name, output: result.content)
+                            }
                             continuation.yield(event)
                         }
                     }
 
-                    let session = LanguageModelSession(
-                        model: model,
-                        tools: wrappedTools,
-                        instructions: instructions
-                    )
+                    // Instructions (system prompt + vault excerpts) are folded into the
+                    // per-round prompt rather than the session's `instructions:`, because
+                    // the Ollama backend drops session instructions entirely.
+                    let session = LanguageModelSession(model: model, tools: wrappedTools, instructions: "")
 
-                    // AnyLanguageModel's session runs a SINGLE model round per
-                    // `respond`: it executes any tools the model requests (firing our
-                    // adapter's .toolStart/.toolEnd) but does NOT loop back for a final
-                    // answer — and `streamResponse` drops tool calls entirely. So the
-                    // agentic loop lives here. A round that returns empty content means
-                    // the model only called tools (Ollama emits no text on a tool-call
-                    // turn); we nudge it to synthesize from the tool results now in the
-                    // session transcript and ask again. The first non-empty answer — or
-                    // the round cap — ends the loop.
+                    // The session runs a SINGLE model round per `respond` and does not
+                    // loop, so the agentic loop lives here: a round that returns empty
+                    // content means the model only called tools (their outputs are now in
+                    // `toolLog`); we rebuild the prompt with those results and ask again.
+                    // The first non-empty answer — or the round cap — ends the loop.
                     var finalText = ""
-                    var nextPrompt = prompt
-                    for _ in 0..<Self.maxToolRounds {
+                    for round in 0..<Self.maxToolRounds {
                         try Task.checkCancellation()
-                        let response = try await session.respond(to: nextPrompt, options: options)
+                        let roundPrompt = Self.roundPrompt(
+                            instructions: instructions,
+                            userRequest: prompt,
+                            toolResults: toolLog.snapshot(),
+                            forceAnswer: round == Self.maxToolRounds - 1
+                        )
+                        let response = try await session.respond(to: roundPrompt, options: options)
                         let text = response.content
                         if !text.isEmpty {
                             continuation.yield(.textToken(text))
                             finalText = text
                             break
                         }
-                        nextPrompt = Self.continuationPrompt
                     }
 
                     continuation.yield(.done(finalText: finalText))
@@ -124,11 +129,46 @@ public actor SessionAgentRunner {
     /// loop gives up — bounds pathological or looping tool use.
     static let maxToolRounds = 8
 
-    /// Sent after a tool-only round to ask the model to synthesize a final answer
-    /// from the tool results now in the session transcript (it may call more tools).
-    static let continuationPrompt =
-        "Continue. Use the tool results above to answer the user's request; "
-        + "call additional tools only if you still need more information."
+    /// Build a self-contained prompt for one agent round. Because the backing model
+    /// may be stateless (Ollama sends only the latest prompt), every round restates
+    /// the instructions, the user request, and the results of any tools already
+    /// called this turn — so the model always has the full picture.
+    ///
+    /// - Parameter forceAnswer: on the final allowed round, tell the model to answer
+    ///   now without calling more tools, so the loop terminates with content.
+    static func roundPrompt(
+        instructions: String,
+        userRequest: String,
+        toolResults: [ToolResultLog.Entry],
+        forceAnswer: Bool
+    ) -> String {
+        var parts: [String] = []
+        if !instructions.isEmpty { parts.append(instructions) }
+        parts.append("User request:\n\(userRequest)")
+
+        if !toolResults.isEmpty {
+            var block = "Results from tools you have already called this turn:\n"
+            for entry in toolResults {
+                block += "- \(entry.name): \(entry.output)\n"
+            }
+            parts.append(block.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
+        if forceAnswer {
+            parts.append("Answer the user's request now using the information above. Do NOT call any tools.")
+        } else if toolResults.isEmpty {
+            parts.append(
+                "If you need information from the vault, call vault_search to find notes, "
+                + "then read_document with an exact `path:` from a search result. Then answer the request."
+            )
+        } else {
+            parts.append(
+                "Now answer the user's request using these results. Call another tool only if you "
+                + "genuinely need more information (e.g. a tool errored — fix the arguments and retry)."
+            )
+        }
+        return parts.joined(separator: "\n\n")
+    }
 
     // MARK: - Error mapping
 
@@ -201,6 +241,31 @@ struct EventEmittingToolAdapter: AnyLanguageModel.Tool {
             ))
             throw error
         }
+    }
+}
+
+// MARK: - Tool result log
+
+/// Thread-safe accumulator for tool outputs produced during one agent run, so the
+/// runner can fold them into the next round's prompt. The session invokes tools
+/// from its own isolation, so appends may arrive off the runner's task.
+final class ToolResultLog: @unchecked Sendable {
+    struct Entry: Sendable {
+        let name: String
+        let output: String
+    }
+
+    private let lock = NSLock()
+    private var entries: [Entry] = []
+
+    func append(name: String, output: String) {
+        lock.lock(); defer { lock.unlock() }
+        entries.append(Entry(name: name, output: output))
+    }
+
+    func snapshot() -> [Entry] {
+        lock.lock(); defer { lock.unlock() }
+        return entries
     }
 }
 

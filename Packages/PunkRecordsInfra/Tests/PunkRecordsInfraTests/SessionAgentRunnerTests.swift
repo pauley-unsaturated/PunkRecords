@@ -270,6 +270,46 @@ struct SessionAgentRunnerTests {
         #expect(sawTool == false)
         #expect(texts == ["42"])
     }
+
+    @Test("Loop folds instructions + prior tool results into each round's prompt")
+    func roundPromptsCarryContextAndToolResults() async throws {
+        let stub = StubTool(name: "vault_search", result: ToolResult(content: "RESULT-MARKER-42"))
+        let recorder = PromptRecorder()
+        let model = RoundScriptedLanguageModel(
+            rounds: [.callTool(name: "vault_search"), .answer("done")],
+            recorder: recorder
+        )
+        let runner = SessionAgentRunner(model: model, instructions: "SYS-CONTEXT-XYZ", tools: [stub])
+        for try await _ in await runner.run(prompt: "find my notes") {}
+
+        let prompts = recorder.snapshot()
+        #expect(prompts.count >= 2)
+        // Round 0: instructions + user request, before any tool results exist.
+        #expect(prompts[0].contains("SYS-CONTEXT-XYZ"))
+        #expect(prompts[0].contains("find my notes"))
+        // Round 1: the prior tool's output is threaded forward — the stateless
+        // backend would otherwise lose it (the bug this guards against).
+        #expect(prompts[1].contains("RESULT-MARKER-42"))
+    }
+
+    @Test("roundPrompt composes context, request, results; forceAnswer suppresses tools")
+    func roundPromptComposition() {
+        let withResults = SessionAgentRunner.roundPrompt(
+            instructions: "CTX",
+            userRequest: "Q",
+            toolResults: [.init(name: "vault_search", output: "OUT")],
+            forceAnswer: false
+        )
+        #expect(withResults.contains("CTX"))
+        #expect(withResults.contains("Q"))
+        #expect(withResults.contains("vault_search"))
+        #expect(withResults.contains("OUT"))
+
+        let forced = SessionAgentRunner.roundPrompt(
+            instructions: "", userRequest: "Q", toolResults: [], forceAnswer: true
+        )
+        #expect(forced.localizedCaseInsensitiveContains("do not call"))
+    }
 }
 
 // MARK: - Round-based scripted model (Ollama-faithful: one model round per `respond`)
@@ -288,6 +328,7 @@ private struct RoundScriptedLanguageModel: AnyLanguageModel.LanguageModel {
     }
 
     let rounds: [Round]
+    var recorder: PromptRecorder?
     private let cursor = RoundCursor()
 
     func respond<Content>(
@@ -297,6 +338,7 @@ private struct RoundScriptedLanguageModel: AnyLanguageModel.LanguageModel {
         includeSchemaInPrompt: Bool,
         options: GenerationOptions
     ) async throws -> LanguageModelSession.Response<Content> where Content: Generable {
+        recorder?.record(prompt.description)
         let index = await cursor.next()
         let round = rounds[min(index, rounds.count - 1)]
         switch round {
@@ -343,6 +385,20 @@ private struct RoundScriptedLanguageModel: AnyLanguageModel.LanguageModel {
 private actor RoundCursor {
     private var index = 0
     func next() -> Int { defer { index += 1 }; return index }
+}
+
+/// Thread-safe recorder of the prompt text the model received on each round.
+private final class PromptRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var prompts: [String] = []
+    func record(_ prompt: String) {
+        lock.lock(); defer { lock.unlock() }
+        prompts.append(prompt)
+    }
+    func snapshot() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return prompts
+    }
 }
 
 /// Open an `any Tool` existential to call it with `GeneratedContent` arguments
