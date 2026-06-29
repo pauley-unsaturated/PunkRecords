@@ -45,7 +45,15 @@ struct LLMChatPanel: View {
             .padding(.horizontal)
             .padding(.vertical, 8)
             .background(providerKeyboardShortcuts)
-            .task { await refreshAvailableProviders() }
+            .task {
+                // Re-probe while the panel is open so a provider that comes online
+                // after launch (e.g. you start `ollama serve`, or add an API key in
+                // Settings) un-grays on its own without reopening the panel.
+                while !Task.isCancelled {
+                    await refreshAvailableProviders()
+                    try? await Task.sleep(for: .seconds(4))
+                }
+            }
 
             Divider()
 
