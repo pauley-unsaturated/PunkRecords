@@ -74,7 +74,7 @@ struct SessionAgentRunnerToolEventTests {
             case .toolStart(let name, _): return "start(\(name))"
             case .toolEnd(let name, let result): return "end(\(name),err=\(result.isError))"
             case .turnStart(let index): return "turnStart(\(index))"
-            case .turnEnd(let index): return "turnEnd(\(index))"
+            case .turnEnd(let index, _): return "turnEnd(\(index))"
             case .done: return "done"
             default: return nil
             }

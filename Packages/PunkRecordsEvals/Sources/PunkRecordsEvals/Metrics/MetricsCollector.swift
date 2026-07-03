@@ -44,7 +44,10 @@ public actor MetricsCollector {
                 ))
                 currentToolStart = nil
                 currentToolName = nil
-            case .turnEnd:
+            case .turnEnd(_, let usage):
+                if let usage {
+                    currentTurnTokens = currentTurnTokens + TokenMetrics(from: usage)
+                }
                 let elapsed = currentTurnStart.map { ContinuousClock.now - $0 } ?? .zero
                 completedTurns.append(TurnMetrics(
                     turnIndex: currentTurnIndex,
@@ -67,9 +70,4 @@ public actor MetricsCollector {
         return (metrics, finalText)
     }
 
-    /// Record token usage for the current turn. No session-path caller yet:
-    /// usage reporting awaits the runner-side estimation tracked in PUNK-4bu.
-    public func recordTurnTokens(_ tokens: TokenMetrics) {
-        currentTurnTokens = currentTurnTokens + tokens
-    }
 }

@@ -7,11 +7,10 @@ import PunkRecordsInfra
 /// Evaluates turn/tool efficiency and metric aggregation on the **session path**
 /// (`ScriptedLanguageModel` → `SessionAgentRunner`).
 ///
-/// Token *counts* on the session path are currently reported as zero: unlike the
-/// legacy `InstrumentedProvider`, AnyLanguageModel exposes no usage surface, so
-/// per-turn token metrics await the TokenEstimator wiring tracked in PUNK-4bu.
-/// Until then these evals pin down what IS real today — turn structure, tool
-/// attribution, and report plumbing — so the token assertions can land on top.
+/// Token counts are ESTIMATES: AnyLanguageModel exposes no usage surface, so
+/// `SessionAgentRunner` reports `TokenEstimator` heuristics (~4 chars/token)
+/// for each round's prompt and completion via `turnEnd`. Assertions here are
+/// deliberately loose bounds over those estimates.
 @Suite("Token Efficiency Evals")
 struct TokenEfficiencyEvals {
 
@@ -39,8 +38,12 @@ struct TokenEfficiencyEvals {
         #expect(result.success, "Failures: \(result.failureReasons)")
         #expect(result.metrics.turnCount == 1)
         #expect(result.metrics.toolCallCount == 0)
-        // Token counts are zero until PUNK-4bu wires estimation into the runner.
-        #expect(result.metrics.totalTokens.totalTokens == 0)
+        // Estimated usage: the round prompt (instructions + request) dominates;
+        // the one-sentence completion is small.
+        let tokens = result.metrics.totalTokens
+        #expect(tokens.promptTokens > 0, "Round prompt should carry estimated tokens")
+        #expect(tokens.completionTokens > 0, "Completion should carry estimated tokens")
+        #expect(tokens.completionTokens < 100, "One-sentence answer should estimate small")
     }
 
     @Test("Multi-turn task round growth is bounded")
@@ -70,6 +73,14 @@ struct TokenEfficiencyEvals {
         #expect(turns.count == 2)
         #expect(turns[0].toolCalls.count == 1)
         #expect(turns[1].toolCalls.isEmpty)
+
+        // The second round's prompt folds in the first round's tool results,
+        // so its estimated prompt tokens must grow; the tool-only round has no
+        // completion tokens.
+        #expect(turns[0].tokens.completionTokens == 0)
+        #expect(turns[1].tokens.promptTokens > turns[0].tokens.promptTokens,
+                "Round 2 prompt should grow by the folded tool results")
+        #expect(turns[1].tokens.completionTokens > 0)
     }
 
     @Test("Cache metric fields survive the report schema on the session path")

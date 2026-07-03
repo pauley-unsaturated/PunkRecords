@@ -113,13 +113,21 @@ public actor SessionAgentRunner {
                         let session = LanguageModelSession(model: model, tools: wrappedTools)
                         let response = try await session.respond(to: roundPrompt, options: options)
                         let text = response.content
+                        // AnyLanguageModel surfaces no real usage, so estimate
+                        // per round: the full prompt we sent and the text we got
+                        // back. Tool outputs count toward the NEXT round's
+                        // prompt (they're folded into it), not this completion.
+                        let usage = TokenUsage(
+                            promptTokens: TokenEstimator.estimateTokens(in: roundPrompt),
+                            completionTokens: text.isEmpty ? 0 : TokenEstimator.estimateTokens(in: text)
+                        )
                         if !text.isEmpty {
                             continuation.yield(.textToken(text))
-                            continuation.yield(.turnEnd(turnIndex: round))
+                            continuation.yield(.turnEnd(turnIndex: round, usage: usage))
                             finalText = text
                             break
                         }
-                        continuation.yield(.turnEnd(turnIndex: round))
+                        continuation.yield(.turnEnd(turnIndex: round, usage: usage))
                     }
 
                     continuation.yield(.done(finalText: finalText))

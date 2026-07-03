@@ -140,11 +140,18 @@ public actor ContextBuilder {
         var excerpts: [DocumentExcerpt] = []
         var usedTokens = 0
 
-        // Add current document first
+        // Add current document first. Only truncate when the doc genuinely
+        // exceeds its half-budget share: feeding the doc's own (round-down)
+        // token estimate back into truncateToTokenBudget re-derives a char
+        // budget up to 3 chars SHORT of the actual length, and the sentence-
+        // boundary fallback then discards everything after the last period.
         if let docID = currentDocumentID,
            let doc = try await repository.document(withID: docID) {
-            let docTokens = min(budget / 2, TokenEstimator.estimateTokens(in: doc.content))
-            let truncated = TokenEstimator.truncateToTokenBudget(doc.content, budget: docTokens)
+            let docShare = budget / 2
+            let fitsWhole = TokenEstimator.estimateTokens(in: doc.content) <= docShare
+            let truncated = fitsWhole
+                ? doc.content
+                : TokenEstimator.truncateToTokenBudget(doc.content, budget: docShare)
             excerpts.append(DocumentExcerpt(
                 documentID: doc.id,
                 title: doc.title,

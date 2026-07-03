@@ -88,14 +88,42 @@ public struct ScriptedLanguageModel: LanguageModel {
         }
     }
 
+    /// Thread-safe recorder for the prompts the model receives, one entry per
+    /// round. Lets evals assert on instruction folding and context threading
+    /// (what `SessionAgentRunner` actually sent us each round).
+    public final class PromptLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [String] = []
+
+        public init() {}
+
+        func append(_ prompt: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            entries.append(prompt)
+        }
+
+        /// The recorded round prompts, in order.
+        public var prompts: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return entries
+        }
+    }
+
     private let steps: [Step]
     private let cursor = Cursor()
+    private let promptLog: PromptLog?
 
-    /// - Parameter script: The ordered steps the model replays, one round per
-    ///   `respond` call (rounds are delimited by ``Step/endTurn``). Copies of
-    ///   the model share replay position, so one instance scripts one run.
-    public init(script: [Step]) {
+    /// - Parameters:
+    ///   - script: The ordered steps the model replays, one round per
+    ///     `respond` call (rounds are delimited by ``Step/endTurn``). Copies of
+    ///     the model share replay position, so one instance scripts one run.
+    ///   - promptLog: Optional recorder that captures each round's incoming
+    ///     prompt text for assertions.
+    public init(script: [Step], promptLog: PromptLog? = nil) {
         self.steps = script
+        self.promptLog = promptLog
     }
 
     public func respond<Content>(
@@ -105,6 +133,7 @@ public struct ScriptedLanguageModel: LanguageModel {
         includeSchemaInPrompt: Bool,
         options: GenerationOptions
     ) async throws -> LanguageModelSession.Response<Content> where Content: Generable {
+        promptLog?.append(prompt.description)
         let text = try await runRound(in: session)
         if let stringContent = text as? Content {
             return LanguageModelSession.Response(
@@ -128,6 +157,7 @@ public struct ScriptedLanguageModel: LanguageModel {
         includeSchemaInPrompt: Bool,
         options: GenerationOptions
     ) -> sending LanguageModelSession.ResponseStream<Content> where Content: Generable {
+        promptLog?.append(prompt.description)
         let round = cursor.nextRound(from: steps)
         let stream = AsyncThrowingStream<LanguageModelSession.ResponseStream<Content>.Snapshot, any Error> { continuation in
             let task = Task {

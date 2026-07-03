@@ -1,9 +1,10 @@
 import Foundation
 
-/// Token accounting for one model call. The session path does not report usage
-/// yet (PUNK-4bu tracks estimating it in `SessionAgentRunner`); the type remains
-/// the currency eval metrics are denominated in, including the cache fields that
-/// keep historical report schemas comparable.
+/// Token accounting for one model round. AnyLanguageModel exposes no real
+/// usage, so the session runner reports `TokenEstimator` heuristics
+/// (~4 chars/token) through `AgentEvent.turnEnd`. Cache fields remain so
+/// historical eval-report schemas stay comparable; they read zero until a
+/// backend surfaces real cache accounting.
 public struct TokenUsage: Sendable, Codable {
     public let promptTokens: Int
     public let completionTokens: Int

@@ -86,9 +86,9 @@ public struct EvalHarness: Sendable {
             tools: tools
         )
 
-        // The runner emits real turnStart/turnEnd rounds, so the same collector
-        // the AgentLoop path uses attributes tool calls and latency per turn.
-        // Token counts stay zero until the runner reports usage (PUNK-4bu).
+        // The runner emits real turnStart/turnEnd rounds — with estimated
+        // per-round token usage — so the collector attributes tool calls,
+        // latency, and tokens per turn.
         let collector = MetricsCollector()
         let stream = await runner.run(prompt: scenario.userPrompt)
         let (metrics, finalText) = try await collector.collect(

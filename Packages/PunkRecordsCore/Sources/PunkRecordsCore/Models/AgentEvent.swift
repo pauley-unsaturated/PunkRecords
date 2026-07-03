@@ -7,7 +7,11 @@ public enum AgentEvent: Sendable {
     case textToken(String)
     case toolStart(name: String, arguments: String)
     case toolEnd(name: String, result: ToolResult)
-    case turnEnd(turnIndex: Int)
+    /// Ends one model round. `usage` is the round's token accounting when the
+    /// producer can supply it — currently ``TokenEstimator`` heuristics from
+    /// the session runner (AnyLanguageModel reports no real usage), `nil` when
+    /// unknown.
+    case turnEnd(turnIndex: Int, usage: TokenUsage?)
     case done(finalText: String)
     case error(AgentError)
 }
