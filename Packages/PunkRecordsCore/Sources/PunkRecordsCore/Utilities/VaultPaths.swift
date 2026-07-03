@@ -89,10 +89,19 @@ public enum VaultPaths {
         let invalid = CharacterSet(charactersIn: "/\\:*?\"<>|")
         let joined = filename.components(separatedBy: invalid).joined(separator: "-")
         // Collapse whitespace into single dashes; trim leading/trailing dashes.
-        let collapsed = joined
+        var collapsed = joined
             .components(separatedBy: .whitespaces)
             .filter { !$0.isEmpty }
             .joined(separator: "-")
+        // Defense in depth: no ".." may survive. Separators are already gone,
+        // but a name like "..-..-etc-passwd" still reads as traversal to
+        // scanners and humans. Single dots (e.g. "09.42.31.png") are fine.
+        while collapsed.contains("..") {
+            collapsed = collapsed.replacingOccurrences(of: "..", with: "-")
+        }
+        while collapsed.contains("--") {
+            collapsed = collapsed.replacingOccurrences(of: "--", with: "-")
+        }
         return collapsed.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
     }
 }

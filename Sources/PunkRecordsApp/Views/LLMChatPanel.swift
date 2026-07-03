@@ -167,9 +167,8 @@ struct LLMChatPanel: View {
     }
 
     private func refreshAvailableProviders() async {
-        // Availability follows the SESSION path (LanguageModelFactory), not the
-        // legacy orchestrator: a provider is selectable when the factory can
-        // actually build and use it (key stored / Ollama reachable / on-device ready).
+        // A provider is selectable when LanguageModelFactory can actually build
+        // and use it (key stored / Ollama reachable / on-device model ready).
         availableProviders = await LanguageModelFactory.availableProviders(
             keychain: appState.keychainService,
             config: factoryConfig
@@ -236,11 +235,9 @@ struct LLMChatPanel: View {
     }
 
     /// Produce an `AgentEvent` stream via the FoundationModels session path
-    /// (M2 `SessionAgentRunner` + M3 `LanguageModelFactory` + M4 `buildInstructions`)
-    /// and render it with the SAME event-handling code the panel used for
-    /// `AgentLoop`. Only the *producer* changed: the session now owns the
-    /// agentic tool loop. `AgentLoop` and the legacy providers remain in place
-    /// for other consumers (NoteCompiler / evals) — strangler-fig.
+    /// (`SessionAgentRunner` + `LanguageModelFactory` + `buildInstructions`)
+    /// and render it. The session owns the agentic tool loop; this panel only
+    /// translates events into chat bubbles.
     private func sendAgentMessage(_ text: String, context: MessageContext) async {
         guard let repository = appState.repository,
               let searchIndex = appState.searchIndex else {

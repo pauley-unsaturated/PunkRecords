@@ -2,13 +2,10 @@ import AnyLanguageModel
 import Foundation
 
 /// A deterministic, no-network ``AnyLanguageModel/LanguageModel`` that replays a
-/// canned script of assistant text and tool calls. It is the session-path
-/// analogue of ``ScriptedProvider`` (which scripts the legacy `AgentLoop` via
-/// `completeWithTools`): where `ScriptedProvider` feeds `LLMToolResponse`s into
-/// the hand-rolled loop, `ScriptedLanguageModel` plays the role of the *model*
-/// behind an AnyLanguageModel `LanguageModelSession` so `SessionAgentRunner`'s
-/// real round loop — tool-result folding, force-answer, round cap — can be
-/// exercised end-to-end without an API key.
+/// canned script of assistant text and tool calls. It plays the role of the
+/// *model* behind an AnyLanguageModel `LanguageModelSession` so
+/// `SessionAgentRunner`'s real round loop — tool-result folding, force-answer,
+/// round cap — can be exercised end-to-end without an API key.
 ///
 /// ## Rounds
 /// `SessionAgentRunner` drives the session with one `respond` call per model

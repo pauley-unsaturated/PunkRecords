@@ -1,10 +1,14 @@
 import Testing
 import Foundation
+import AnyLanguageModel
 @testable import PunkRecordsCore
 @testable import PunkRecordsInfra
 import PunkRecordsTestSupport
 
-/// End-to-end prompt evaluations against the real Anthropic API.
+/// End-to-end prompt evaluations against the real Anthropic API, on the
+/// **session path** the app ships (`LanguageModelFactory` →
+/// `SessionTextCompleter` / `NoteCompiler`), not the deleted legacy
+/// orchestrator.
 ///
 /// These tests validate that our prompts produce structurally correct output:
 /// frontmatter, headings, wikilinks, tags, and coherent content.
@@ -78,27 +82,41 @@ struct PromptEvalTests {
         ),
     ]
 
-    /// Build an orchestrator wired to the real Anthropic provider.
-    static func makeOrchestrator() async throws -> (LLMOrchestrator, MockDocumentRepository, MockSearchService) {
+    /// Seed a mock vault and return its repo/search pair.
+    static func makeVault() async throws -> (MockDocumentRepository, MockSearchService) {
         let mockRepo = MockDocumentRepository()
         let mockSearch = MockSearchService()
-
-        // Seed mock repo with vault documents
         for doc in vaultDocuments {
             try await mockRepo.save(doc)
         }
+        return (mockRepo, mockSearch)
+    }
 
-        let contextBuilder = ContextBuilder(searchService: mockSearch, repository: mockRepo)
-        let orchestrator = LLMOrchestrator(
-            contextBuilder: contextBuilder,
-            defaultProviderID: .anthropic,
+    /// The real Anthropic model via the same factory the app uses.
+    static func anthropicModel() throws -> any LanguageModel {
+        try LanguageModelFactory.makeModel(for: .anthropic, keychain: keychain)
+    }
+
+    /// Run one instructed chat completion the way the app does: assemble
+    /// instructions with `ContextBuilder.buildInstructions`, then drive the
+    /// session path via `SessionTextCompleter`.
+    static func completeChat(
+        prompt: String,
+        scope: QueryScope,
+        currentDocumentID: DocumentID?,
+        repo: MockDocumentRepository,
+        search: MockSearchService
+    ) async throws -> String {
+        let contextBuilder = ContextBuilder(searchService: search, repository: repo)
+        let instructions = try await contextBuilder.buildInstructions(
+            prompt: prompt,
+            scope: scope,
+            currentDocumentID: currentDocumentID,
+            maxTokens: 128_000,
             vaultName: "Eval Vault"
         )
-
-        let anthropic = AnthropicProvider(keychainService: keychain)
-        await orchestrator.registerProvider(anthropic)
-
-        return (orchestrator, mockRepo, mockSearch)
+        let completer = SessionTextCompleter(model: try anthropicModel(), instructions: instructions)
+        return try await completer.complete(prompt: prompt)
     }
 
     /// Skip the test if no API key is available.
@@ -149,7 +167,7 @@ struct PromptEvalTests {
     func kbQueryEval() async throws {
         try Self.requireAPIKey()
 
-        let (orchestrator, _, mockSearch) = try await Self.makeOrchestrator()
+        let (mockRepo, mockSearch) = try await Self.makeVault()
 
         // Set up search results so context builder finds docs
         await mockSearch.setSearchResults([
@@ -162,13 +180,13 @@ struct PromptEvalTests {
             )
         ])
 
-        let response = try await orchestrator.complete(
+        let text = try await Self.completeChat(
             prompt: "What do my notes say about actor reentrancy?",
             scope: .global,
-            currentDocumentID: Self.vaultDocuments[0].id
+            currentDocumentID: Self.vaultDocuments[0].id,
+            repo: mockRepo,
+            search: mockSearch
         )
-
-        let text = response.text
 
         // Structural assertions
         MarkdownAssertions.hasMinimumLength(text, minWords: 20)
@@ -179,10 +197,8 @@ struct PromptEvalTests {
                                   text.lowercased().contains("concurrency")
         #expect(mentionsConcurrency, "Response should mention actor/reentrancy/concurrency concepts")
 
-        // Should have token usage
-        #expect(response.usage != nil, "Response should include token usage")
-        #expect(response.usage?.promptTokens ?? 0 > 0, "Prompt tokens should be > 0")
-        #expect(response.usage?.completionTokens ?? 0 > 0, "Completion tokens should be > 0")
+        // Token usage assertions were dropped with the legacy provider: the
+        // session path reports no usage yet (PUNK-4bu tracks restoring it).
     }
 
     // MARK: - Save Response As Note
@@ -191,8 +207,12 @@ struct PromptEvalTests {
     func saveAsNoteEval() async throws {
         try Self.requireAPIKey()
 
-        let (orchestrator, mockRepo, _) = try await Self.makeOrchestrator()
-        let compiler = NoteCompiler(orchestrator: orchestrator, repository: mockRepo)
+        let (mockRepo, _) = try await Self.makeVault()
+        // Same wiring as production: NoteCompiler over the session-path completer.
+        let compiler = NoteCompiler(
+            completer: SessionTextCompleter(model: try Self.anthropicModel()),
+            repository: mockRepo
+        )
 
         let chatResponse = """
         Swift's actor model provides data-race safety through isolation. Each actor has its own
@@ -241,8 +261,11 @@ struct PromptEvalTests {
     func compileFromSourceEval() async throws {
         try Self.requireAPIKey()
 
-        let (orchestrator, mockRepo, _) = try await Self.makeOrchestrator()
-        let compiler = NoteCompiler(orchestrator: orchestrator, repository: mockRepo)
+        let (mockRepo, _) = try await Self.makeVault()
+        let compiler = NoteCompiler(
+            completer: SessionTextCompleter(model: try Self.anthropicModel()),
+            repository: mockRepo
+        )
 
         let sourceContent = """
         Meeting notes — 2026-03-20, Architecture Review
@@ -302,15 +325,15 @@ struct PromptEvalTests {
     func noSystemPromptLeakage() async throws {
         try Self.requireAPIKey()
 
-        let (orchestrator, _, _) = try await Self.makeOrchestrator()
+        let (mockRepo, mockSearch) = try await Self.makeVault()
 
-        let response = try await orchestrator.complete(
+        let text = (try await Self.completeChat(
             prompt: "What is 2 + 2?",
             scope: .global,
-            currentDocumentID: nil
-        )
-
-        let text = response.text.lowercased()
+            currentDocumentID: nil,
+            repo: mockRepo,
+            search: mockSearch
+        )).lowercased()
 
         // The response should not contain fragments of our system prompt
         #expect(!text.contains("knowledge base context:"), "Response leaked system prompt")

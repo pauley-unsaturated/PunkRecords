@@ -6,23 +6,17 @@ import AnyLanguageModel
 import PunkRecordsTestSupport
 import PunkRecordsEvals
 
-/// Session-path counterpart to `LiveAgentEvals`. These drive the **new** path —
-/// `LanguageModelFactory.makeModel` → `SessionAgentRunner` (via
-/// `EvalHarness.runLiveSession`) — against the real Anthropic / OpenAI APIs,
-/// instead of the legacy `AgentLoop` + `AnthropicProvider`/`OpenAIProvider`.
+/// Live evals for the shipping path — `LanguageModelFactory.makeModel` →
+/// `SessionAgentRunner` (via `EvalHarness.runLiveSession`) — against the real
+/// Anthropic / OpenAI APIs.
 ///
 /// Tagged `.eval` so they only run intentionally (they cost real money) and
 /// `.serialized` to avoid hammering the provider concurrently.
 ///
-/// ## What is and isn't ported
-/// - Ported: the harness scenarios (simple Q&A, search + synthesize, empty
-///   vault, aggregate) now run via `runLiveSession`, and the vault-routing test
-///   drives `SessionAgentRunner` directly with the vault tools.
-/// - **Not** ported: the prompt-cache assertions and the native `web_search`
-///   server-tool tests from `LiveAgentEvals`. Cache accounting reads
-///   `AnthropicProvider`'s `TokenUsage.cache*` fields directly, and the native
-///   web_search server tool has no AnyLanguageModel analog (recon §4). Both stay
-///   on the legacy path in `LiveAgentEvals`, which is kept compiling.
+/// Capabilities the deleted legacy live suite covered that have no session
+/// analogue yet: prompt-cache accounting (PUNK-4bu — AnyLanguageModel exposes
+/// no usage surface) and Anthropic's native `web_search` server tool
+/// (PUNK-e5u tracks a provider-agnostic replacement).
 @Suite("Live Session Agent Evals", .tags(.eval), .serialized)
 struct LiveSessionAgentEvals {
 

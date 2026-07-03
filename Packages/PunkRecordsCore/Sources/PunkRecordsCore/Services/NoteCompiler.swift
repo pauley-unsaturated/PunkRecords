@@ -7,11 +7,11 @@ public actor NoteCompiler {
     private let repository: any DocumentRepository
     private let parser: MarkdownParser
 
-    /// Designated initializer: depend on the minimal ``TextCompleter`` seam.
+    /// Depend on the minimal ``TextCompleter`` seam.
     ///
     /// The concrete completer is supplied from outside Core — the app injects a
-    /// session-path implementation (Infra), evals/tests inject a mock or the
-    /// legacy orchestrator. Core stays pure.
+    /// session-path implementation (Infra), evals/tests inject a mock. Core
+    /// stays pure.
     public init(
         completer: any TextCompleter,
         repository: any DocumentRepository,
@@ -20,17 +20,6 @@ public actor NoteCompiler {
         self.completer = completer
         self.repository = repository
         self.parser = parser
-    }
-
-    /// Convenience initializer for callers that still hold an ``LLMOrchestrator``
-    /// (legacy path / live evals). The orchestrator conforms to ``TextCompleter``
-    /// via `complete(prompt:)`, so this is a thin forward to the designated init.
-    public init(
-        orchestrator: LLMOrchestrator,
-        repository: any DocumentRepository,
-        parser: MarkdownParser = MarkdownParser()
-    ) {
-        self.init(completer: orchestrator, repository: repository, parser: parser)
     }
 
     /// Creates a new note from an LLM response. The LLM generates title, tags, and wikilinks.

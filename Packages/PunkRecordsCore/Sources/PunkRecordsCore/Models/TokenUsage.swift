@@ -1,5 +1,9 @@
 import Foundation
 
+/// Token accounting for one model call. The session path does not report usage
+/// yet (PUNK-4bu tracks estimating it in `SessionAgentRunner`); the type remains
+/// the currency eval metrics are denominated in, including the cache fields that
+/// keep historical report schemas comparable.
 public struct TokenUsage: Sendable, Codable {
     public let promptTokens: Int
     public let completionTokens: Int
@@ -24,24 +28,5 @@ public struct TokenUsage: Sendable, Codable {
         self.completionTokens = completionTokens
         self.cacheCreationInputTokens = cacheCreationInputTokens
         self.cacheReadInputTokens = cacheReadInputTokens
-    }
-}
-
-public struct LLMResponse: Sendable {
-    public let text: String
-    public let providerID: LLMProviderID
-    public let usedDocuments: [DocumentID]
-    public let usage: TokenUsage?
-
-    public init(
-        text: String,
-        providerID: LLMProviderID,
-        usedDocuments: [DocumentID] = [],
-        usage: TokenUsage? = nil
-    ) {
-        self.text = text
-        self.providerID = providerID
-        self.usedDocuments = usedDocuments
-        self.usage = usage
     }
 }

@@ -6,17 +6,18 @@ import PunkRecordsCore
 /// a concrete AnyLanguageModel ``LanguageModel`` that the session path
 /// (``SessionAgentRunner``) can drive.
 ///
-/// This is the M3 strangler-fig seam: instead of resolving an `LLMProvider`
-/// actor (which owns the old hand-rolled request shape), callers resolve a
-/// `LanguageModel` and hand it to a `LanguageModelSession`, letting the session
-/// own the agentic tool loop. Core stays pure — it never names AnyLanguageModel /
-/// FoundationModels; this Infra factory does the one-way mapping.
+/// This is the app's single model-resolution seam: callers resolve a
+/// `LanguageModel` and hand it to a `LanguageModelSession` (via
+/// ``SessionAgentRunner``), letting the session own the agentic tool loop.
+/// Core stays pure — it never names AnyLanguageModel / FoundationModels; this
+/// Infra factory does the one-way mapping. Chat (`LLMChatPanel`), note
+/// compilation (``DeferredSessionTextCompleter``), and the live evals all
+/// resolve through here.
 ///
 /// Return type is `any AnyLanguageModel.LanguageModel` deliberately: that is what
 /// ``SessionAgentRunner/init(model:instructions:tools:options:)`` consumes, and
 /// every backend here (`OllamaLanguageModel`, `OpenAILanguageModel`, and ALM's
-/// `SystemLanguageModel` bridge) conforms to it. ADDITIVE — not yet wired into the
-/// UI; the existing `LLMProvider`/`LLMOrchestrator` path is untouched.
+/// `SystemLanguageModel` bridge) conforms to it.
 ///
 /// ## Provider mapping
 /// | Provider             | Backend                                            |
@@ -184,8 +185,8 @@ public enum LanguageModelFactory {
     // MARK: - Helpers
 
     /// ALM's `SystemLanguageModel` bridges to Apple's on-device FoundationModels
-    /// model. It is gated `@available(macOS 26, *)`; the deployment target is
-    /// macOS 27, so the symbol is unconditionally available here. Returned even
+    /// model. It is gated `@available(macOS 26, *)`, which the deployment target
+    /// meets, so the symbol is unconditionally available here. Returned even
     /// when the device reports it unavailable — availability is the caller's
     /// concern (`model.isAvailable`), and the factory's job is construction.
     private static func makeSystemLanguageModel() -> any AnyLanguageModel.LanguageModel {

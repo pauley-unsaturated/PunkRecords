@@ -2,17 +2,16 @@ import AnyLanguageModel
 import Foundation
 import PunkRecordsCore
 
-/// Drives an LLM agent through AnyLanguageModel's `LanguageModelSession` — which
-/// owns its own agentic tool loop — and surfaces progress as PunkRecords Core
-/// ``AgentEvent``s so existing UI (built against the `AgentLoop` event stream)
-/// can consume it unchanged.
+/// Drives an LLM agent through AnyLanguageModel's `LanguageModelSession` and
+/// surfaces progress as PunkRecords Core ``AgentEvent``s for the chat UI and
+/// eval metrics to consume.
 ///
-/// This is the strangler-fig replacement for the hand-rolled ``AgentLoop``: the
-/// session, not us, decides when to call a tool and feeds results back. We only
-/// observe and translate. Core stays pure — it never imports
-/// FoundationModels / AnyLanguageModel; this Infra type does the one-way bridge.
+/// The session resolves tool calls within a round; this runner owns the
+/// multi-round agentic loop and the context threading between rounds. Core
+/// stays pure — it never imports FoundationModels / AnyLanguageModel; this
+/// Infra type does the one-way bridge.
 ///
-/// Event mapping (mirrors what `AgentLoop` emits today):
+/// Event mapping:
 ///   - `.agentStart` once at the start;
 ///   - `.turnStart(i)` / `.turnEnd(i)` around each model round — one round per
 ///     `session.respond` call, so rounds ARE turns (metrics count them);

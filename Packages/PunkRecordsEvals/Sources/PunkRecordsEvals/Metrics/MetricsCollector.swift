@@ -67,7 +67,8 @@ public actor MetricsCollector {
         return (metrics, finalText)
     }
 
-    /// Record token usage for the current turn (called by InstrumentedProvider).
+    /// Record token usage for the current turn. No session-path caller yet:
+    /// usage reporting awaits the runner-side estimation tracked in PUNK-4bu.
     public func recordTurnTokens(_ tokens: TokenMetrics) {
         currentTurnTokens = currentTurnTokens + tokens
     }

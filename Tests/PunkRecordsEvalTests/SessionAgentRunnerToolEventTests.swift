@@ -6,26 +6,18 @@ import AnyLanguageModel
 import PunkRecordsTestSupport
 import PunkRecordsEvals
 
-/// Deterministic, no-network tests for the tool-event plumbing on the **session
-/// path** (`SessionAgentRunner` driving a `LanguageModelSession`). This is the
-/// session-path analogue of `AgentLoopWebSearchTests`, which exercised the same
-/// `toolStart` / `toolEnd` ordering and JSON-argument contract on the legacy
-/// `AgentLoop` via `ScriptedProvider`.
+/// Deterministic, no-network tests for the tool-event plumbing on the session
+/// path (`SessionAgentRunner` driving a `LanguageModelSession`).
 ///
-/// ## Scope difference vs. the AgentLoop version
-/// `AgentLoopWebSearchTests` also asserts Anthropic's **native `web_search`
-/// server tool** plumbing (`serverTools == [.webSearch(maxUses: 5)]`,
-/// `serverToolUse` / `serverToolResult` content blocks → `web_search`
-/// `toolStart` / `toolEnd`). That is AgentLoop-specific: AnyLanguageModel's
-/// backends (including its remote `AnthropicLanguageModel`) expose **no** native
-/// web_search server tool (recon §4), so there is no session-path analogue to
-/// port. Those server-tool assertions deliberately remain on the AgentLoop path
-/// (`AgentLoopWebSearchTests`), which is kept compiling for exactly this reason.
+/// The client-tool event contract: when the model calls a vault tool,
+/// `SessionAgentRunner` must emit `toolStart` then `toolEnd` in document order,
+/// with the toolStart payload carrying JSON-encoded arguments, and the
+/// `toolEnd` `isError` flag round-tripping a failed tool.
 ///
-/// What *does* port cleanly is the client-tool event contract: when the model
-/// calls a vault tool, `SessionAgentRunner` must emit `toolStart` then `toolEnd`
-/// in document order, with the toolStart payload carrying JSON-encoded
-/// arguments, and the `toolEnd` `isError` flag round-tripping a failed tool.
+/// Note: AnyLanguageModel's backends (including the remote
+/// `AnthropicLanguageModel`) expose no native web_search server tool, so the
+/// server-tool coverage the legacy `AgentLoop` suite carried has no session
+/// analogue; a provider-agnostic WebSearchTool is tracked in PUNK-e5u.
 @Suite("SessionAgentRunner tool-event plumbing")
 struct SessionAgentRunnerToolEventTests {
 

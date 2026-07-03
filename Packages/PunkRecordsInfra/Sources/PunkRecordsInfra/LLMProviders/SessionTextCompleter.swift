@@ -4,12 +4,10 @@ import PunkRecordsCore
 
 /// Session-path implementation of the Core ``TextCompleter`` seam.
 ///
-/// This is the strangler-fig backend for ``NoteCompiler``: instead of routing a
-/// single instructed completion through the legacy `LLMOrchestrator` / `LLMProvider`
-/// pair, it drives an AnyLanguageModel ``LanguageModelSession`` (via the shared
-/// ``SessionAgentRunner``) and collapses the resulting ``AgentEvent`` stream back
-/// into one text blob — exactly the "one prompt in → one text out" contract
-/// ``NoteCompiler`` needs.
+/// The completion backend for ``NoteCompiler``: drives an AnyLanguageModel
+/// ``LanguageModelSession`` (via the shared ``SessionAgentRunner``) and
+/// collapses the resulting ``AgentEvent`` stream back into one text blob —
+/// exactly the "one prompt in → one text out" contract ``NoteCompiler`` needs.
 ///
 /// No tools are attached: note compilation is a pure text-structuring step (the
 /// prompt already carries all instructions and the source material), so there is
