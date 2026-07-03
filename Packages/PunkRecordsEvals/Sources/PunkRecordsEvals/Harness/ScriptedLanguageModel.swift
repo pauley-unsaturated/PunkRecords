@@ -6,9 +6,22 @@ import Foundation
 /// analogue of ``ScriptedProvider`` (which scripts the legacy `AgentLoop` via
 /// `completeWithTools`): where `ScriptedProvider` feeds `LLMToolResponse`s into
 /// the hand-rolled loop, `ScriptedLanguageModel` plays the role of the *model*
-/// inside an AnyLanguageModel `LanguageModelSession` so the session's own tool
-/// loop — and `SessionAgentRunner`'s event translation — can be exercised
-/// end-to-end without an API key.
+/// behind an AnyLanguageModel `LanguageModelSession` so `SessionAgentRunner`'s
+/// real round loop — tool-result folding, force-answer, round cap — can be
+/// exercised end-to-end without an API key.
+///
+/// ## Rounds
+/// `SessionAgentRunner` drives the session with one `respond` call per model
+/// round: a round that produces no text means "the model only called tools",
+/// so the runner folds the tool outputs into the next round's prompt and asks
+/// again. Scripts mirror that shape: ``Step/endTurn`` closes a round, and each
+/// `respond` replays exactly one round's steps (a shared cursor advances across
+/// calls). A script with no `.endTurn` is a single round; once the script is
+/// exhausted, further rounds return no text.
+///
+/// To simulate a multi-round agent, make every round before the last tool-only
+/// (no `.emitText`), because the runner treats ANY returned text as the final
+/// answer and stops looping — exactly like the shipping path.
 ///
 /// ## Why this conforms cleanly
 /// - `UnavailableReason == Never`, so the `LanguageModel where UnavailableReason
@@ -16,33 +29,34 @@ import Foundation
 ///   implement `availability`.
 /// - `CustomGenerationOptions` is left defaulted to `Never`.
 /// - `prewarm(...)` / `logFeedbackAttachment(...)` have protocol default impls.
-/// - Only `respond(...)` and `streamResponse(...)` must be implemented, and
-///   `SessionAgentRunner` only ever calls `streamResponse` with `Content == String`.
+/// - Only `respond(...)` and `streamResponse(...)` must be implemented;
+///   `SessionAgentRunner` drives `respond` (one call per round).
 ///
 /// ## How tool calls fire events
 /// The session passes its tools (each a `SessionAgentRunner.EventEmittingToolAdapter`)
-/// to `streamResponse` via `session.tools`. A `.callTool` step looks the tool up
-/// by name and invokes `tool.call(arguments:)` — exactly what
-/// `OllamaLanguageModel` does in `resolveToolCalls`. Because the tool is wrapped
-/// in the event-emitting adapter, that call drives the same `.toolStart` /
-/// `.toolEnd` ``AgentEvent``s the live path emits. We append the tool's text
-/// output to the running transcript-side text so later snapshots can reflect it,
-/// but the scripted text steps are what the harness asserts on.
-///
-/// Snapshots are *cumulative* (the whole text so far), matching the contract
-/// `SessionAgentRunner.SnapshotDeltaTracker` expects.
+/// to the model via `session.tools`. A `.callTool` step looks the tool up by
+/// name and invokes `tool.call(arguments:)` — exactly what `OllamaLanguageModel`
+/// does in `resolveToolCalls`. Because the tool is wrapped in the event-emitting
+/// adapter, that call drives the same `.toolStart` / `.toolEnd` ``AgentEvent``s
+/// the live path emits.
 public struct ScriptedLanguageModel: LanguageModel {
     /// This model is always available (no network, no device gating).
     public typealias UnavailableReason = Never
 
     /// One step in the scripted response.
     public enum Step: Sendable {
-        /// Emit a chunk of assistant text (streamed as a growing cumulative snapshot).
+        /// Emit a chunk of assistant text. Text chunks within a round concatenate
+        /// into that round's response (streamed as growing cumulative snapshots
+        /// on the `streamResponse` path).
         case emitText(String)
         /// Invoke a tool by `name` with `arguments`, letting the session's tool
-        /// adapter run it (and emit `.toolStart` / `.toolEnd`). The tool's text
-        /// output is discarded for scripting determinism.
+        /// adapter run it (and emit `.toolStart` / `.toolEnd`).
         case callTool(name: String, arguments: [String: GeneratedContentValue])
+        /// Close the current model round: `respond` returns the text accumulated
+        /// so far this round, and the next `respond` resumes replay after this
+        /// marker. A tool-only round returns no text, which keeps the runner's
+        /// loop going — the mechanism multi-turn scenarios script against.
+        case endTurn
     }
 
     /// A minimal, `Sendable` JSON-ish value for scripting tool-call arguments,
@@ -78,10 +92,11 @@ public struct ScriptedLanguageModel: LanguageModel {
     }
 
     private let steps: [Step]
+    private let cursor = Cursor()
 
-    /// - Parameter script: The ordered steps the model replays for the single
-    ///   response it produces. Text steps concatenate into the final assistant
-    ///   message; tool steps fire the session's tools in order.
+    /// - Parameter script: The ordered steps the model replays, one round per
+    ///   `respond` call (rounds are delimited by ``Step/endTurn``). Copies of
+    ///   the model share replay position, so one instance scripts one run.
     public init(script: [Step]) {
         self.steps = script
     }
@@ -93,10 +108,7 @@ public struct ScriptedLanguageModel: LanguageModel {
         includeSchemaInPrompt: Bool,
         options: GenerationOptions
     ) async throws -> LanguageModelSession.Response<Content> where Content: Generable {
-        // Drive the same tool calls so non-streaming callers see consistent
-        // behavior, then materialize the concatenated text. SessionAgentRunner
-        // uses streamResponse, so this path is a faithful-but-secondary shim.
-        let text = try await runSteps(in: session)
+        let text = try await runRound(in: session)
         if let stringContent = text as? Content {
             return LanguageModelSession.Response(
                 content: stringContent,
@@ -119,12 +131,12 @@ public struct ScriptedLanguageModel: LanguageModel {
         includeSchemaInPrompt: Bool,
         options: GenerationOptions
     ) -> sending LanguageModelSession.ResponseStream<Content> where Content: Generable {
-        let steps = self.steps
+        let round = cursor.nextRound(from: steps)
         let stream = AsyncThrowingStream<LanguageModelSession.ResponseStream<Content>.Snapshot, any Error> { continuation in
             let task = Task {
                 do {
                     var cumulative = ""
-                    for step in steps {
+                    for step in round {
                         try Task.checkCancellation()
                         switch step {
                         case let .emitText(chunk):
@@ -142,11 +154,12 @@ public struct ScriptedLanguageModel: LanguageModel {
                             // The session would wrap a throw in a ToolCallError; we
                             // let it propagate so the runner maps it the same way.
                             try await invoke(tool, with: args)
+                        case .endTurn:
+                            break // Unreachable: nextRound strips the delimiter.
                         }
                     }
                     // A final cumulative snapshot guarantees the stream yields at
-                    // least once even for a tool-only script (so .done carries the
-                    // accumulated text).
+                    // least once even for a tool-only round.
                     if let snapshot = Self.stringSnapshot(cumulative, as: Content.self) {
                         continuation.yield(snapshot)
                     }
@@ -162,26 +175,51 @@ public struct ScriptedLanguageModel: LanguageModel {
 
     // MARK: - Helpers
 
-    /// Replay tool steps and concatenate text steps (used by the non-streaming shim).
-    private func runSteps(in session: LanguageModelSession) async throws -> String {
+    /// Advance the cursor one round: replay its tool steps and concatenate its
+    /// text steps (used by `respond`, the path `SessionAgentRunner` drives).
+    private func runRound(in session: LanguageModelSession) async throws -> String {
         var cumulative = ""
-        for step in steps {
+        for step in cursor.nextRound(from: steps) {
             switch step {
             case let .emitText(chunk):
                 cumulative += chunk
             case let .callTool(name, arguments):
                 guard let tool = session.tools.first(where: { $0.name == name }) else { continue }
                 try await invoke(tool, with: Self.makeArguments(arguments))
+            case .endTurn:
+                break // Unreachable: nextRound strips the delimiter.
             }
         }
         return cumulative
     }
 
+    /// Shared replay position. A reference type so struct copies of the model
+    /// (the session may copy it) advance the same script.
+    private final class Cursor: @unchecked Sendable {
+        private let lock = NSLock()
+        private var index = 0
+
+        /// Return the steps of the next un-replayed round (up to, excluding, the
+        /// next `.endTurn`) and advance past it. Empty once the script is spent.
+        func nextRound(from steps: [Step]) -> [Step] {
+            lock.lock()
+            defer { lock.unlock() }
+            var round: [Step] = []
+            while index < steps.count {
+                let step = steps[index]
+                index += 1
+                if case .endTurn = step { break }
+                round.append(step)
+            }
+            return round
+        }
+    }
+
     /// Build a cumulative-text snapshot for the `Content == String` case.
     ///
-    /// `SessionAgentRunner` only ever streams with `Content == String`, so this
-    /// returns `nil` for any other `Content` (no structured-output script support
-    /// is needed). Using a conditional cast keeps the model force-cast free.
+    /// The runner only ever generates `String` content, so this returns `nil`
+    /// for any other `Content` (no structured-output script support is needed).
+    /// Using a conditional cast keeps the model force-cast free.
     private static func stringSnapshot<Content>(
         _ text: String,
         as type: Content.Type

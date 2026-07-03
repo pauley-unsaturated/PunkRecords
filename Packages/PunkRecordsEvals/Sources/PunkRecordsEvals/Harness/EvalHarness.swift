@@ -86,9 +86,10 @@ public struct EvalHarness: Sendable {
     /// `SessionAgentRunner` translates events.
     ///
     /// The vault, tools, instructions, and ground-truth evaluation are identical
-    /// to ``runMock``; only the execution engine differs. Because the session path
-    /// emits a single logical agent invocation (no per-turn boundaries), metrics
-    /// collapse the run into one synthesized turn carrying every tool call.
+    /// to ``runMock``; only the execution engine differs. `SessionAgentRunner`
+    /// emits real `turnStart`/`turnEnd` boundaries (one per model round), so
+    /// turn counts in ground truth are measured, not synthesized — structure
+    /// scripts with ``ScriptedLanguageModel/Step/endTurn`` to shape the rounds.
     public func runMockSession(
         scenario: EvalScenario,
         script: [ScriptedLanguageModel.Step],
@@ -151,8 +152,12 @@ public struct EvalHarness: Sendable {
             tools: tools
         )
 
+        // The runner emits real turnStart/turnEnd rounds, so the same collector
+        // the AgentLoop path uses attributes tool calls and latency per turn.
+        // Token counts stay zero until the runner reports usage (PUNK-4bu).
+        let collector = MetricsCollector()
         let stream = await runner.run(prompt: scenario.userPrompt)
-        let (metrics, finalText) = try await Self.collectSessionMetrics(
+        let (metrics, finalText) = try await collector.collect(
             from: stream,
             scenarioID: scenario.id
         )
@@ -173,45 +178,6 @@ public struct EvalHarness: Sendable {
             failureReasons: failures,
             finalOutput: finalText
         )
-    }
-
-    /// Collect a session-path ``AgentEvent`` stream into ``TaskMetrics``.
-    ///
-    /// The session path has no per-turn boundaries (the session, not us, owns the
-    /// loop), so we synthesize exactly one ``TurnMetrics`` that carries every tool
-    /// call observed. That yields `turnCount == 1` and `toolCallCount == observed`,
-    /// matching the ground-truth ranges the scenarios assert.
-    static func collectSessionMetrics(
-        from stream: AsyncThrowingStream<AgentEvent, Error>,
-        scenarioID: String
-    ) async throws -> (TaskMetrics, String) {
-        var finalText = ""
-        var toolCalls: [ToolCallRecord] = []
-        var success = true
-
-        for try await event in stream {
-            switch event {
-            case .textToken(let token):
-                finalText += token
-            case .toolEnd(let name, let result):
-                toolCalls.append(ToolCallRecord(toolName: name, latencyMS: 0, isError: result.isError))
-            case .done(let text):
-                if finalText.isEmpty { finalText = text }
-            case .error(let err):
-                switch err {
-                case .cancelled, .maxIterationsExceeded:
-                    success = false
-                default:
-                    success = false
-                }
-            case .agentStart, .turnStart, .toolStart, .turnEnd:
-                break
-            }
-        }
-
-        let turn = TurnMetrics(turnIndex: 0, tokens: .zero, latencyMS: 0, toolCalls: toolCalls)
-        let metrics = TaskMetrics(scenarioID: scenarioID, turns: [turn], success: success)
-        return (metrics, finalText)
     }
 
     /// Run a scenario with a live provider (slow, costly, real metrics).
@@ -307,6 +273,48 @@ public struct EvalHarness: Sendable {
         var candidateResults: [ScenarioResult] = []
         for pair in candidate.scenarioScripts {
             let result = try await runMock(scenario: pair.scenario, script: pair.script, variant: candidate.variant)
+            candidateResults.append(result)
+        }
+
+        let baselineReport = EvalReport(promptVariantID: baseline.variant.id, results: baselineResults)
+        let candidateReport = EvalReport(promptVariantID: candidate.variant.id, results: candidateResults)
+        let comparison = VariantComparator().compare(baseline: baselineReport, candidate: candidateReport)
+
+        return (baselineReport, candidateReport, comparison)
+    }
+
+    /// Configuration for a single **session-path** variant run within a comparison:
+    /// the session analogue of ``VariantRun``, scripting ``ScriptedLanguageModel``
+    /// rounds instead of legacy `LLMToolResponse` turns.
+    public struct SessionVariantRun: Sendable {
+        public let variant: PromptVariant
+        public let scenarioScripts: [(scenario: EvalScenario, script: [ScriptedLanguageModel.Step])]
+
+        public init(variant: PromptVariant,
+                    scenarioScripts: [(scenario: EvalScenario, script: [ScriptedLanguageModel.Step])]) {
+            self.variant = variant
+            self.scenarioScripts = scenarioScripts
+        }
+    }
+
+    /// Run a set of scenarios with two different prompt variants on the **session
+    /// path** and compare the reports — the session engine's `compareVariantsMock`.
+    /// Uses scripted mock models; for live A/B testing drive `runLiveSession` per
+    /// variant instead.
+    public func compareVariantsMockSession(
+        baseline: SessionVariantRun,
+        candidate: SessionVariantRun
+    ) async throws -> (baselineReport: EvalReport, candidateReport: EvalReport, comparison: VariantComparison) {
+
+        var baselineResults: [ScenarioResult] = []
+        for pair in baseline.scenarioScripts {
+            let result = try await runMockSession(scenario: pair.scenario, script: pair.script, variant: baseline.variant)
+            baselineResults.append(result)
+        }
+
+        var candidateResults: [ScenarioResult] = []
+        for pair in candidate.scenarioScripts {
+            let result = try await runMockSession(scenario: pair.scenario, script: pair.script, variant: candidate.variant)
             candidateResults.append(result)
         }
 

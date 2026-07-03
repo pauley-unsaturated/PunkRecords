@@ -2,15 +2,15 @@ name: PunkRecords
 options:
   bundleIdPrefix: com.markpauley
   deploymentTarget:
-    macOS: "27.0"
-  xcodeVersion: "27.0"
+    macOS: "26.0"
+  xcodeVersion: "26.0"
   generateEmptyDirectories: true
   groupSortPosition: top
 
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MACOSX_DEPLOYMENT_TARGET: "27.0"
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
 
 localPackages:
   - Packages/PunkRecordsCore

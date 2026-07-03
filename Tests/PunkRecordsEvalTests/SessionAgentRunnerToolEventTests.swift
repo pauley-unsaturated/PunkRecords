@@ -57,8 +57,11 @@ struct SessionAgentRunnerToolEventTests {
     func toolEventsInOrder() async throws {
         let (_, _, tools) = await makeTools()
 
-        // Mirrors the AgentLoop test's interleaving: text, then a tool call, then
-        // text — asserting the events land in document order.
+        // One round mixing narration and a tool call. The runner drives one
+        // `respond` per round: the session resolves the tool call (firing
+        // toolStart/toolEnd mid-round) and the round's text arrives as a single
+        // textToken AFTER respond returns — so tools precede text, and real turn
+        // boundaries bracket the round.
         let model = ScriptedLanguageModel(script: [
             .emitText("I'll search the vault for that.\n"),
             .callTool(name: "vault_search", arguments: ["query": .string("swift concurrency")]),
@@ -78,6 +81,8 @@ struct SessionAgentRunnerToolEventTests {
             case .textToken: return "text"
             case .toolStart(let name, _): return "start(\(name))"
             case .toolEnd(let name, let result): return "end(\(name),err=\(result.isError))"
+            case .turnStart(let index): return "turnStart(\(index))"
+            case .turnEnd(let index): return "turnEnd(\(index))"
             case .done: return "done"
             default: return nil
             }
@@ -91,10 +96,11 @@ struct SessionAgentRunnerToolEventTests {
         }
 
         #expect(collapsed == [
-            "text",
+            "turnStart(0)",
             "start(vault_search)",
             "end(vault_search,err=false)",
             "text",
+            "turnEnd(0)",
             "done",
         ])
 

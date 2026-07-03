@@ -277,19 +277,13 @@ struct FlywheelTests {
             userPrompt: "Say hi",
             groundTruth: GroundTruth(turnRange: 1...1)
         )
-        let script: [LLMToolResponse] = [
-            LLMToolResponse(
-                contentBlocks: [.text("Hi!")],
-                stopReason: .endTurn,
-                usage: TokenUsage(promptTokens: 100, completionTokens: 10)
-            )
-        ]
+        let script: [ScriptedLanguageModel.Step] = [.emitText("Hi!")]
 
-        let result = try await harness.compareVariantsMock(
-            baseline: EvalHarness.VariantRun(variant: baselineVariant,
-                                              scenarioScripts: [(scenario, script)]),
-            candidate: EvalHarness.VariantRun(variant: candidateVariant,
-                                               scenarioScripts: [(scenario, script)])
+        let result = try await harness.compareVariantsMockSession(
+            baseline: EvalHarness.SessionVariantRun(variant: baselineVariant,
+                                                    scenarioScripts: [(scenario, script)]),
+            candidate: EvalHarness.SessionVariantRun(variant: candidateVariant,
+                                                     scenarioScripts: [(scenario, script)])
         )
 
         #expect(result.baselineReport.promptVariantID == "baseline-v1")
@@ -326,14 +320,11 @@ struct FlywheelTests {
             userPrompt: "Test",
             groundTruth: GroundTruth(turnRange: 1...1)
         )
-        let script = [LLMToolResponse(
-            contentBlocks: [.text("OK")], stopReason: .endTurn,
-            usage: TokenUsage(promptTokens: 50, completionTokens: 5)
-        )]
+        let script: [ScriptedLanguageModel.Step] = [.emitText("OK")]
 
-        let result = try await harness.compareVariantsMock(
-            baseline: EvalHarness.VariantRun(variant: baseline, scenarioScripts: [(scenario, script)]),
-            candidate: EvalHarness.VariantRun(variant: candidate, scenarioScripts: [(scenario, script)])
+        let result = try await harness.compareVariantsMockSession(
+            baseline: EvalHarness.SessionVariantRun(variant: baseline, scenarioScripts: [(scenario, script)]),
+            candidate: EvalHarness.SessionVariantRun(variant: candidate, scenarioScripts: [(scenario, script)])
         )
 
         try store.save(result.baselineReport)

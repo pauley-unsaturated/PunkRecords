@@ -3,8 +3,17 @@ import Foundation
 import PunkRecordsCore
 import PunkRecordsEvals
 
-/// Agent task completion evals — runs scenarios with scripted provider responses
-/// to verify the agent loop behaves correctly across different task types.
+/// Agent task completion evals — runs scenarios against the **session path**
+/// (`ScriptedLanguageModel` → `SessionAgentRunner`, the engine the app ships)
+/// to verify the agent behaves correctly across different task types.
+///
+/// ## Script shape
+/// Scripts are round-structured: `.endTurn` closes one model round, so each
+/// `respond` the runner issues replays exactly one round. A round whose steps
+/// are all tool calls returns no text, which makes the runner fold the tool
+/// results into the next round's prompt and ask again — the real shipping loop.
+/// The first round that emits text ends the run. Turn counts in ground truth
+/// are therefore *real* round counts, not synthesized.
 @Suite("Task Completion Evals")
 struct TaskCompletionEvals {
 
@@ -30,20 +39,16 @@ struct TaskCompletionEvals {
             )
         )
 
-        let script: [LLMToolResponse] = [
-            LLMToolResponse(
-                contentBlocks: [.text("""
-                Your notes describe actor reentrancy as a subtle issue in Swift concurrency. \
-                When an actor method hits a suspension point (`await`), other callers can execute \
-                on the actor in the meantime. The key takeaway from [[Actor Reentrancy]] is to \
-                always re-check preconditions after suspension points.
-                """)],
-                stopReason: .endTurn,
-                usage: TokenUsage(promptTokens: 500, completionTokens: 80)
-            )
+        let script: [ScriptedLanguageModel.Step] = [
+            .emitText("""
+            Your notes describe actor reentrancy as a subtle issue in Swift concurrency. \
+            When an actor method hits a suspension point (`await`), other callers can execute \
+            on the actor in the meantime. The key takeaway from [[Actor Reentrancy]] is to \
+            always re-check preconditions after suspension points.
+            """),
         ]
 
-        let result = try await harness.runMock(scenario: scenario, script: script)
+        let result = try await harness.runMockSession(scenario: scenario, script: script)
         #expect(result.success, "Failures: \(result.failureReasons)")
         #expect(result.metrics.turnCount == 1)
         #expect(result.metrics.toolCallCount == 0)
@@ -72,41 +77,25 @@ struct TaskCompletionEvals {
             )
         )
 
-        let script: [LLMToolResponse] = [
-            // Turn 1: agent decides to search
-            LLMToolResponse(
-                contentBlocks: [
-                    .text("Let me search your vault for graph theory notes."),
-                    .toolUse(id: "tool_1", name: "vault_search", input: ["query": .string("graph theory")])
-                ],
-                stopReason: .toolUse,
-                usage: TokenUsage(promptTokens: 600, completionTokens: 40)
-            ),
-            // Turn 2: agent reads the found document
-            LLMToolResponse(
-                contentBlocks: [
-                    .text("I found a note. Let me read it."),
-                    .toolUse(id: "tool_2", name: "read_document", input: ["path": .string("math/graph-theory-basics.md")])
-                ],
-                stopReason: .toolUse,
-                usage: TokenUsage(promptTokens: 800, completionTokens: 30)
-            ),
-            // Turn 3: agent synthesizes
-            LLMToolResponse(
-                contentBlocks: [.text("""
-                Here's a summary of your graph theory notes:
+        let script: [ScriptedLanguageModel.Step] = [
+            // Round 1: tool-only — the runner loops, folding the search results forward.
+            .callTool(name: "vault_search", arguments: ["query": .string("graph theory")]),
+            .endTurn,
+            // Round 2: read the found document.
+            .callTool(name: "read_document", arguments: ["path": .string("math/graph-theory-basics.md")]),
+            .endTurn,
+            // Round 3: synthesize — text ends the loop.
+            .emitText("""
+            Here's a summary of your graph theory notes:
 
-                Your [[Graph Theory Basics]] note covers the fundamentals: a graph G = (V, E) \
-                consists of vertices and edges. You distinguish between directed and undirected \
-                graphs, noting that wikilinks in a knowledge base are directed but backlinks \
-                make them bidirectional.
-                """)],
-                stopReason: .endTurn,
-                usage: TokenUsage(promptTokens: 1200, completionTokens: 100)
-            ),
+            Your [[Graph Theory Basics]] note covers the fundamentals: a graph G = (V, E) \
+            consists of vertices and edges. You distinguish between directed and undirected \
+            graphs, noting that wikilinks in a knowledge base are directed but backlinks \
+            make them bidirectional.
+            """),
         ]
 
-        let result = try await harness.runMock(scenario: scenario, script: script)
+        let result = try await harness.runMockSession(scenario: scenario, script: script)
         #expect(result.success, "Failures: \(result.failureReasons)")
         #expect(result.metrics.turnCount == 3)
         #expect(result.metrics.toolCallCount == 2)
@@ -135,36 +124,19 @@ struct TaskCompletionEvals {
             )
         )
 
-        let script: [LLMToolResponse] = [
-            // Turn 1: search
-            LLMToolResponse(
-                contentBlocks: [
-                    .toolUse(id: "tool_1", name: "vault_search", input: ["query": .string("actors Sendable")])
-                ],
-                stopReason: .toolUse,
-                usage: TokenUsage(promptTokens: 500, completionTokens: 20)
-            ),
-            // Turn 2: create note
-            LLMToolResponse(
-                contentBlocks: [
-                    .toolUse(id: "tool_2", name: "create_note", input: [
-                        "title": .string("Actors and Sendable"),
-                        "content": .string("Actors enforce isolation. Sendable marks types safe to cross boundaries."),
-                        "tags": .array([.string("swift"), .string("concurrency")])
-                    ])
-                ],
-                stopReason: .toolUse,
-                usage: TokenUsage(promptTokens: 900, completionTokens: 50)
-            ),
-            // Turn 3: confirm
-            LLMToolResponse(
-                contentBlocks: [.text("I've created note 'Actors and Sendable' summarizing the relationship.")],
-                stopReason: .endTurn,
-                usage: TokenUsage(promptTokens: 1000, completionTokens: 30)
-            ),
+        let script: [ScriptedLanguageModel.Step] = [
+            .callTool(name: "vault_search", arguments: ["query": .string("actors Sendable")]),
+            .endTurn,
+            .callTool(name: "create_note", arguments: [
+                "title": .string("Actors and Sendable"),
+                "content": .string("Actors enforce isolation. Sendable marks types safe to cross boundaries."),
+                "tags": .array([.string("swift"), .string("concurrency")]),
+            ]),
+            .endTurn,
+            .emitText("I've created note 'Actors and Sendable' summarizing the relationship."),
         ]
 
-        let result = try await harness.runMock(scenario: scenario, script: script)
+        let result = try await harness.runMockSession(scenario: scenario, script: script)
         #expect(result.success, "Failures: \(result.failureReasons)")
         #expect(result.metrics.toolCallCount >= 2)
     }
@@ -196,65 +168,29 @@ struct TaskCompletionEvals {
             )
         )
 
-        let script: [LLMToolResponse] = [
-            // Turn 1: search reentrancy
-            LLMToolResponse(
-                contentBlocks: [
-                    .text("Let me research this topic."),
-                    .toolUse(id: "t1", name: "vault_search", input: ["query": .string("actor reentrancy")])
-                ],
-                stopReason: .toolUse,
-                usage: TokenUsage(promptTokens: 500, completionTokens: 30)
-            ),
-            // Turn 2: read reentrancy doc + search task groups
-            LLMToolResponse(
-                contentBlocks: [
-                    .toolUse(id: "t2", name: "read_document", input: ["path": .string("swift/actor-reentrancy.md")]),
-                ],
-                stopReason: .toolUse,
-                usage: TokenUsage(promptTokens: 700, completionTokens: 20)
-            ),
-            // Turn 3: search task groups
-            LLMToolResponse(
-                contentBlocks: [
-                    .toolUse(id: "t3", name: "vault_search", input: ["query": .string("task group")]),
-                ],
-                stopReason: .toolUse,
-                usage: TokenUsage(promptTokens: 900, completionTokens: 20)
-            ),
-            // Turn 4: read task group doc
-            LLMToolResponse(
-                contentBlocks: [
-                    .toolUse(id: "t4", name: "read_document", input: ["path": .string("swift/task-groups.md")]),
-                ],
-                stopReason: .toolUse,
-                usage: TokenUsage(promptTokens: 1100, completionTokens: 20)
-            ),
-            // Turn 5: create note
-            LLMToolResponse(
-                contentBlocks: [
-                    .toolUse(id: "t5", name: "create_note", input: [
-                        "title": .string("Actor Reentrancy and Task Groups"),
-                        "content": .string("Both actor reentrancy and task group cancellation require careful state management."),
-                        "tags": .array([.string("swift"), .string("concurrency")])
-                    ])
-                ],
-                stopReason: .toolUse,
-                usage: TokenUsage(promptTokens: 1300, completionTokens: 40)
-            ),
-            // Turn 6: final response
-            LLMToolResponse(
-                contentBlocks: [.text("""
-                I've researched actor reentrancy and task groups and created a note with my findings. \
-                The key connection is that both require careful handling of suspension points — \
-                reentrancy can interleave actor state, while task group cancellation must be propagated correctly.
-                """)],
-                stopReason: .endTurn,
-                usage: TokenUsage(promptTokens: 1500, completionTokens: 80)
-            ),
+        let script: [ScriptedLanguageModel.Step] = [
+            .callTool(name: "vault_search", arguments: ["query": .string("actor reentrancy")]),
+            .endTurn,
+            .callTool(name: "read_document", arguments: ["path": .string("swift/actor-reentrancy.md")]),
+            .endTurn,
+            .callTool(name: "vault_search", arguments: ["query": .string("task group")]),
+            .endTurn,
+            .callTool(name: "read_document", arguments: ["path": .string("swift/task-groups.md")]),
+            .endTurn,
+            .callTool(name: "create_note", arguments: [
+                "title": .string("Actor Reentrancy and Task Groups"),
+                "content": .string("Both actor reentrancy and task group cancellation require careful state management."),
+                "tags": .array([.string("swift"), .string("concurrency")]),
+            ]),
+            .endTurn,
+            .emitText("""
+            I've researched actor reentrancy and task groups and created a note with my findings. \
+            The key connection is that both require careful handling of suspension points — \
+            reentrancy can interleave actor state, while task group cancellation must be propagated correctly.
+            """),
         ]
 
-        let result = try await harness.runMock(scenario: scenario, script: script)
+        let result = try await harness.runMockSession(scenario: scenario, script: script)
         #expect(result.success, "Failures: \(result.failureReasons)")
         #expect(result.metrics.turnCount >= 3)
         #expect(result.metrics.toolCallCount >= 4)
@@ -277,24 +213,13 @@ struct TaskCompletionEvals {
             )
         )
 
-        let script: [LLMToolResponse] = [
-            // Agent searches and finds nothing
-            LLMToolResponse(
-                contentBlocks: [
-                    .toolUse(id: "t1", name: "vault_search", input: ["query": .string("quantum computing")])
-                ],
-                stopReason: .toolUse,
-                usage: TokenUsage(promptTokens: 400, completionTokens: 20)
-            ),
-            // Agent responds gracefully
-            LLMToolResponse(
-                contentBlocks: [.text("I searched your vault but didn't find any notes about quantum computing. You haven't written about this topic yet.")],
-                stopReason: .endTurn,
-                usage: TokenUsage(promptTokens: 500, completionTokens: 30)
-            ),
+        let script: [ScriptedLanguageModel.Step] = [
+            .callTool(name: "vault_search", arguments: ["query": .string("quantum computing")]),
+            .endTurn,
+            .emitText("I searched your vault but didn't find any notes about quantum computing. You haven't written about this topic yet."),
         ]
 
-        let result = try await harness.runMock(scenario: scenario, script: script)
+        let result = try await harness.runMockSession(scenario: scenario, script: script)
         #expect(result.success, "Failures: \(result.failureReasons)")
     }
 
@@ -316,41 +241,22 @@ struct TaskCompletionEvals {
             )
         )
 
-        let script: [LLMToolResponse] = [
-            LLMToolResponse(
-                contentBlocks: [
-                    .toolUse(id: "t1", name: "vault_search", input: ["query": .string("actor performance")])
-                ],
-                stopReason: .toolUse,
-                usage: TokenUsage(promptTokens: 400, completionTokens: 20)
-            ),
-            LLMToolResponse(
-                contentBlocks: [
-                    .toolUse(id: "t2", name: "read_document", input: ["path": .string("swift/actor-performance-fast.md")])
-                ],
-                stopReason: .toolUse,
-                usage: TokenUsage(promptTokens: 600, completionTokens: 15)
-            ),
-            LLMToolResponse(
-                contentBlocks: [
-                    .toolUse(id: "t3", name: "read_document", input: ["path": .string("swift/actor-overhead-analysis.md")])
-                ],
-                stopReason: .toolUse,
-                usage: TokenUsage(promptTokens: 800, completionTokens: 15)
-            ),
-            LLMToolResponse(
-                contentBlocks: [.text("""
-                Your notes actually contradict each other on actor performance. \
-                [[Actor Performance Notes]] claims actors are "extremely fast" with <1ns overhead, \
-                while [[Actor Overhead Analysis]] says overhead is ~50ns and can balloon under contention. \
-                You may want to reconcile these with actual benchmarks.
-                """)],
-                stopReason: .endTurn,
-                usage: TokenUsage(promptTokens: 1000, completionTokens: 80)
-            ),
+        let script: [ScriptedLanguageModel.Step] = [
+            .callTool(name: "vault_search", arguments: ["query": .string("actor performance")]),
+            .endTurn,
+            .callTool(name: "read_document", arguments: ["path": .string("swift/actor-performance-fast.md")]),
+            .endTurn,
+            .callTool(name: "read_document", arguments: ["path": .string("swift/actor-overhead-analysis.md")]),
+            .endTurn,
+            .emitText("""
+            Your notes actually contradict each other on actor performance. \
+            [[Actor Performance Notes]] claims actors are "extremely fast" with <1ns overhead, \
+            while [[Actor Overhead Analysis]] says overhead is ~50ns and can balloon under contention. \
+            You may want to reconcile these with actual benchmarks.
+            """),
         ]
 
-        let result = try await harness.runMock(scenario: scenario, script: script)
+        let result = try await harness.runMockSession(scenario: scenario, script: script)
         #expect(result.success, "Failures: \(result.failureReasons)")
     }
 
@@ -369,13 +275,9 @@ struct TaskCompletionEvals {
             groundTruth: GroundTruth(turnRange: 1...1)
         )
 
-        let script = [LLMToolResponse(
-            contentBlocks: [.text("Hello!")],
-            stopReason: .endTurn,
-            usage: TokenUsage(promptTokens: 100, completionTokens: 10)
-        )]
+        let script: [ScriptedLanguageModel.Step] = [.emitText("Hello!")]
 
-        let result = try await harness.runMock(scenario: scenario, script: script)
+        let result = try await harness.runMockSession(scenario: scenario, script: script)
         let report = EvalReport(results: [result])
 
         // Verify JSON round-trip

@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "PunkRecordsInfra",
-    platforms: [.macOS("27.0")],
+    platforms: [.macOS("26.0")],
     products: [
         .library(name: "PunkRecordsInfra", targets: ["PunkRecordsInfra"]),
     ],

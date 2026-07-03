@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "PunkRecordsEvals",
-    platforms: [.macOS("27.0")],
+    platforms: [.macOS("26.0")],
     products: [
         .library(name: "PunkRecordsEvals", targets: ["PunkRecordsEvals"]),
     ],

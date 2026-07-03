@@ -14,6 +14,8 @@ import PunkRecordsCore
 ///
 /// Event mapping (mirrors what `AgentLoop` emits today):
 ///   - `.agentStart` once at the start;
+///   - `.turnStart(i)` / `.turnEnd(i)` around each model round — one round per
+///     `session.respond` call, so rounds ARE turns (metrics count them);
 ///   - `.toolStart(name, args)` / `.toolEnd(name, result)` around each tool call,
 ///     emitted from inside the tool adapter's `call(...)` (the session invokes it);
 ///   - `.textToken(delta)` for each *incremental* slice of model text — the
@@ -35,8 +37,9 @@ public actor SessionAgentRunner {
     /// - Parameters:
     ///   - model: A FoundationModels / AnyLanguageModel model (e.g.
     ///     `OllamaLanguageModel`) the session will drive.
-    ///   - instructions: The system prompt (e.g. from `ContextBuilder`). Passed
-    ///     straight to the session as its `instructions:`.
+    ///   - instructions: The system prompt (e.g. from `ContextBuilder`). Folded
+    ///     into every round's prompt (NOT passed as session `instructions:` —
+    ///     see the round loop for why).
     ///   - tools: Core domain tools the session may call. Each is wrapped in an
     ///     event-emitting adapter built on the M1 ``FoundationModelsToolAdapter``.
     ///   - options: Generation options (sampling/temperature/max tokens).
@@ -82,32 +85,42 @@ public actor SessionAgentRunner {
                         }
                     }
 
-                    // Instructions (system prompt + vault excerpts) are folded into the
-                    // per-round prompt rather than the session's `instructions:`, because
-                    // the Ollama backend drops session instructions entirely.
-                    let session = LanguageModelSession(model: model, tools: wrappedTools, instructions: "")
-
                     // The session runs a SINGLE model round per `respond` and does not
                     // loop, so the agentic loop lives here: a round that returns empty
                     // content means the model only called tools (their outputs are now in
                     // `toolLog`); we rebuild the prompt with those results and ask again.
                     // The first non-empty answer — or the round cap — ends the loop.
+                    // Each round is bracketed by `.turnStart`/`.turnEnd` so metrics can
+                    // count real rounds and attribute tool calls to them.
                     var finalText = ""
                     for round in 0..<Self.maxToolRounds {
                         try Task.checkCancellation()
+                        continuation.yield(.turnStart(turnIndex: round))
                         let roundPrompt = Self.roundPrompt(
                             instructions: instructions,
                             userRequest: prompt,
                             toolResults: toolLog.snapshot(),
                             forceAnswer: round == Self.maxToolRounds - 1
                         )
+                        // A FRESH session every round, carrying no instructions and no
+                        // prior transcript. The runner is the context carrier (folded
+                        // instructions + toolLog in `roundPrompt`), because the Ollama
+                        // backend drops session instructions/history entirely. Reusing
+                        // one session also breaks Anthropic: ALM records a `.response`
+                        // transcript entry even for a text-less tool round (and an
+                        // `.instructions` entry for instructions: ""), and serializes
+                        // both as EMPTY text blocks the Messages API rejects with
+                        // 400 "text content blocks must be non-empty" (PUNK-3az).
+                        let session = LanguageModelSession(model: model, tools: wrappedTools)
                         let response = try await session.respond(to: roundPrompt, options: options)
                         let text = response.content
                         if !text.isEmpty {
                             continuation.yield(.textToken(text))
+                            continuation.yield(.turnEnd(turnIndex: round))
                             finalText = text
                             break
                         }
+                        continuation.yield(.turnEnd(turnIndex: round))
                     }
 
                     continuation.yield(.done(finalText: finalText))

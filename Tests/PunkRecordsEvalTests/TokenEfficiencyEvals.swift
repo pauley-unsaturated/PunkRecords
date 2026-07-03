@@ -3,18 +3,25 @@ import Foundation
 import PunkRecordsCore
 import PunkRecordsEvals
 
-/// Evaluates token efficiency: budget utilization, cost per task, and metric aggregation.
+/// Evaluates turn/tool efficiency and metric aggregation on the **session path**
+/// (`ScriptedLanguageModel` → `SessionAgentRunner`).
+///
+/// Token *counts* on the session path are currently reported as zero: unlike the
+/// legacy `InstrumentedProvider`, AnyLanguageModel exposes no usage surface, so
+/// per-turn token metrics await the TokenEstimator wiring tracked in PUNK-4bu.
+/// Until then these evals pin down what IS real today — turn structure, tool
+/// attribution, and report plumbing — so the token assertions can land on top.
 @Suite("Token Efficiency Evals")
 struct TokenEfficiencyEvals {
 
     let harness = EvalHarness()
 
-    @Test("Single-turn task uses minimal tokens")
+    @Test("Single-turn task stays a single round")
     func singleTurnEfficiency() async throws {
         let scenario = EvalScenario(
             id: "token-single-turn",
             name: "Single Turn Token Check",
-            description: "Verify single-turn responses don't waste tokens",
+            description: "Verify single-turn responses don't spend extra rounds",
             category: .simpleQA,
             vaultDocuments: EvalVaultFixtures.standardVault,
             userPrompt: "What is an actor?",
@@ -23,23 +30,24 @@ struct TokenEfficiencyEvals {
             groundTruth: GroundTruth(turnRange: 1...1)
         )
 
-        let script = [LLMToolResponse(
-            contentBlocks: [.text("An actor provides data-race safety by isolating mutable state.")],
-            stopReason: .endTurn,
-            usage: TokenUsage(promptTokens: 400, completionTokens: 25)
-        )]
+        let script: [ScriptedLanguageModel.Step] = [
+            .emitText("An actor provides data-race safety by isolating mutable state."),
+        ]
 
-        let result = try await harness.runMock(scenario: scenario, script: script)
-        #expect(result.metrics.totalTokens.totalTokens < 1000, "Single turn should use < 1000 tokens")
+        let result = try await harness.runMockSession(scenario: scenario, script: script)
+        #expect(result.success, "Failures: \(result.failureReasons)")
         #expect(result.metrics.turnCount == 1)
+        #expect(result.metrics.toolCallCount == 0)
+        // Token counts are zero until PUNK-4bu wires estimation into the runner.
+        #expect(result.metrics.totalTokens.totalTokens == 0)
     }
 
-    @Test("Multi-turn task token growth is bounded")
+    @Test("Multi-turn task round growth is bounded")
     func multiTurnTokenGrowth() async throws {
         let scenario = EvalScenario(
             id: "token-multi-turn",
             name: "Multi Turn Token Growth",
-            description: "Verify token usage doesn't explode across turns",
+            description: "Verify rounds stay bounded across a tool-using task",
             category: .vaultSearchSynthesize,
             vaultDocuments: EvalVaultFixtures.standardVault,
             queryResultMap: ["concurrency": EvalVaultFixtures.concurrencySearchResults],
@@ -47,33 +55,23 @@ struct TokenEfficiencyEvals {
             groundTruth: GroundTruth(turnRange: 2...3, minToolCalls: 1)
         )
 
-        let script: [LLMToolResponse] = [
-            LLMToolResponse(
-                contentBlocks: [
-                    .toolUse(id: "t1", name: "vault_search", input: ["query": .string("concurrency")])
-                ],
-                stopReason: .toolUse,
-                usage: TokenUsage(promptTokens: 500, completionTokens: 20)
-            ),
-            LLMToolResponse(
-                contentBlocks: [.text("Summary of concurrency notes: actors, async/await, task groups.")],
-                stopReason: .endTurn,
-                usage: TokenUsage(promptTokens: 800, completionTokens: 40)
-            ),
+        let script: [ScriptedLanguageModel.Step] = [
+            .callTool(name: "vault_search", arguments: ["query": .string("concurrency")]),
+            .endTurn,
+            .emitText("Summary of concurrency notes: actors, async/await, task groups."),
         ]
 
-        let result = try await harness.runMock(scenario: scenario, script: script)
+        let result = try await harness.runMockSession(scenario: scenario, script: script)
+        #expect(result.success, "Failures: \(result.failureReasons)")
 
-        // Verify prompt tokens grow but completion stays small
+        // One tool-only round, then the answering round.
         let turns = result.metrics.turns
         #expect(turns.count == 2)
-
-        // Total tokens should be reasonable for a 2-turn interaction
-        #expect(result.metrics.totalTokens.totalTokens < 5000,
-                "2-turn task should use < 5000 total tokens, got \(result.metrics.totalTokens.totalTokens)")
+        #expect(turns[0].toolCalls.count == 1)
+        #expect(turns[1].toolCalls.isEmpty)
     }
 
-    @Test("Cache metrics are tracked in token usage")
+    @Test("Cache metric fields survive the report schema on the session path")
     func cacheMetricsTracking() async throws {
         let scenario = EvalScenario(
             id: "cache-tracking",
@@ -85,21 +83,13 @@ struct TokenEfficiencyEvals {
             groundTruth: GroundTruth(turnRange: 1...1)
         )
 
-        let script = [LLMToolResponse(
-            contentBlocks: [.text("Response")],
-            stopReason: .endTurn,
-            usage: TokenUsage(
-                promptTokens: 1000,
-                completionTokens: 50,
-                cacheCreationInputTokens: 800,
-                cacheReadInputTokens: 200
-            )
-        )]
+        let script: [ScriptedLanguageModel.Step] = [.emitText("Response")]
 
-        let result = try await harness.runMock(scenario: scenario, script: script)
+        let result = try await harness.runMockSession(scenario: scenario, script: script)
         let report = EvalReport(results: [result])
 
-        // Verify JSON round-trip preserves cache metric fields in the schema
+        // The session path reports no cache usage yet (PUNK-4bu), but the report
+        // schema must keep the fields so historical reports stay comparable.
         let json = try report.toJSON()
         let jsonString = String(data: json, encoding: .utf8) ?? ""
         #expect(jsonString.contains("cacheCreationInputTokens"), "Report JSON should include cache creation field")
