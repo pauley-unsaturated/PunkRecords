@@ -226,7 +226,7 @@ struct LLMChatPanel: View {
 
     /// Conservative context-window budget per provider, used to size the
     /// `ContextBuilder` instructions. Mirrors the `maxContextTokens` defaults of
-    /// the legacy `LLMProvider` implementations so the session path selects the
+    /// each backend's own context budget so the session path selects the
     /// same context tier the `AgentLoop` path did.
     private func contextBudget(for provider: LLMProviderID) -> Int {
         switch provider {

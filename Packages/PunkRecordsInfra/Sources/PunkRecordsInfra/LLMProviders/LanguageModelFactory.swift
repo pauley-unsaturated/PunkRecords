@@ -151,7 +151,7 @@ public enum LanguageModelFactory {
 
     /// The providers this factory can currently build a usable model for — i.e.
     /// the ones the chat UI should leave selectable. This reflects the SESSION
-    /// path (not the legacy `LLMOrchestrator`): a remote provider is available
+    /// path: a remote provider is available
     /// when its API key is stored, the local Ollama provider when its server
     /// answers, and the on-device provider when Apple reports the model ready.
     public static func availableProviders(

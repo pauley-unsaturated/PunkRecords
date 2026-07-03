@@ -40,7 +40,7 @@ public actor SessionAgentRunner {
     ///     into every round's prompt (NOT passed as session `instructions:` —
     ///     see the round loop for why).
     ///   - tools: Core domain tools the session may call. Each is wrapped in an
-    ///     event-emitting adapter built on the M1 ``FoundationModelsToolAdapter``.
+    ///     event-emitting adapter built on ``FoundationModelsToolAdapter``.
     ///   - options: Generation options (sampling/temperature/max tokens).
     public init(
         model: any LanguageModel,

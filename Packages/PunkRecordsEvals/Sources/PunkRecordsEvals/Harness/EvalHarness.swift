@@ -33,9 +33,8 @@ public struct EvalHarness: Sendable {
         return try await runSession(scenario: scenario, model: model, variant: variant)
     }
 
-    /// Run a scenario against the session path with a real, injected
-    /// `LanguageModel` (e.g. from `LanguageModelFactory.makeModel`). Slow/costly —
-    /// the session-path analogue of ``runLive``.
+    /// Run a scenario with a real, injected `LanguageModel` (e.g. from
+    /// `LanguageModelFactory.makeModel`). Slow/costly — real API calls.
     public func runLiveSession(
         scenario: EvalScenario,
         model: any LanguageModel,
@@ -44,9 +43,9 @@ public struct EvalHarness: Sendable {
         try await runSession(scenario: scenario, model: model, variant: variant)
     }
 
-    /// Shared session-path driver: seed the mock vault, build tools + instructions,
-    /// drive ``SessionAgentRunner``, collect ``AgentEvent``s into ``TaskMetrics``,
-    /// then score against ground truth (same evaluator as the AgentLoop path).
+    /// Shared driver: seed the mock vault, build tools + instructions, drive
+    /// ``SessionAgentRunner``, collect ``AgentEvent``s into ``TaskMetrics``,
+    /// then score against ground truth.
     private func runSession(
         scenario: EvalScenario,
         model: any LanguageModel,
@@ -116,9 +115,8 @@ public struct EvalHarness: Sendable {
 
     // MARK: - End-to-end variant comparison
 
-    /// Configuration for a single **session-path** variant run within a comparison:
-    /// the session analogue of ``VariantRun``, scripting ``ScriptedLanguageModel``
-    /// rounds instead of legacy `LLMToolResponse` turns.
+    /// Configuration for a single variant run within a comparison, scripting
+    /// ``ScriptedLanguageModel`` rounds.
     public struct SessionVariantRun: Sendable {
         public let variant: PromptVariant
         public let scenarioScripts: [(scenario: EvalScenario, script: [ScriptedLanguageModel.Step])]

@@ -4,7 +4,7 @@ import PunkRecordsCore
 
 /// Bridges a PunkRecords Core ``AgentTool`` to AnyLanguageModel's `Tool`
 /// protocol so a `LanguageModelSession` (which owns its own agentic tool loop)
-/// can invoke our domain tools directly. This is the strangler-fig seam: Core
+/// can invoke our domain tools directly. This is the bridging seam: Core
 /// stays pure (it knows nothing about FoundationModels / AnyLanguageModel), and
 /// this Infra adapter does the one-way translation.
 ///

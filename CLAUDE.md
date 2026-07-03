@@ -5,30 +5,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build Commands
 
 ```sh
-# Generate Xcode project (required after changing project.yml or Package.swift files)
+# Generate Xcode project (required after changing project.yml, Package.swift
+# files, or adding/removing files in app/test targets)
 xcodegen generate
 
-# Build from command line
-xcodebuild -scheme PunkRecords -configuration Debug build
+# Build from command line (-skipMacroValidation is REQUIRED: AnyLanguageModel
+# ships Swift macros that otherwise abort non-interactive xcodebuild runs)
+xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation build
 
-# Run all tests (integration + prompt evals + UI tests)
-xcodebuild -scheme PunkRecords -configuration Debug test
+# Run all tests (integration + evals + UI tests)
+xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test
 
 # Run a single test bundle
-xcodebuild -scheme PunkRecords -configuration Debug test -only-testing:PunkRecordsIntegrationTests
-xcodebuild -scheme PunkRecords -configuration Debug test -only-testing:PunkRecordsPromptEvals
-xcodebuild -scheme PunkRecords -configuration Debug test -only-testing:PunkRecordsUITests
-xcodebuild -scheme PunkRecords -configuration Debug test -only-testing:PunkRecordsEvalTests
+xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -only-testing:PunkRecordsIntegrationTests
+xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -only-testing:PunkRecordsPromptEvals
+xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -only-testing:PunkRecordsUITests
+xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -only-testing:PunkRecordsEvalTests
 
 # Run a single test class or method
-xcodebuild -scheme PunkRecords -configuration Debug test -only-testing:PunkRecordsIntegrationTests/ContextBuilderTests/testSmallTier
+xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -only-testing:PunkRecordsIntegrationTests/ContextBuilderTests/testSmallTier
+
+# Live LLM evals (real API calls, real cost) are opt-in via env flag:
+PUNKRECORDS_LIVE_EVALS=1 xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -only-testing:PunkRecordsEvalTests/LiveSessionAgentEvals
 
 # Lint (style backstop) — run before committing; --strict turns warnings into errors
 swiftlint
 swiftlint --strict
 ```
 
-Requires **Xcode 16+**, **XcodeGen** (`brew install xcodegen`), **SwiftLint** (`brew install swiftlint`), macOS 15+.
+Requires **Xcode 26+**, **XcodeGen** (`brew install xcodegen`), **SwiftLint** (`brew install swiftlint`), **macOS 26+** (deployment target — keep it at the OS/SDK actually installed; a higher target makes every test bundle unrunnable locally).
 
 ## Testing & Validation Discipline
 
@@ -68,12 +73,38 @@ Core Layer (Packages/PunkRecordsCore/)  — Models, protocols, pure-logic servic
 Infra Layer (Packages/PunkRecordsInfra/) — File I/O, SQLite, LLM API clients
 ```
 
-- **Core** defines protocols (`DocumentRepository`, `LLMProvider`, `SearchService`); **Infra** provides concrete implementations.
-- **App** depends on both Core and Infra. Core never imports Infra or App.
+- **Core** defines protocols (`DocumentRepository`, `SearchService`, `TextCompleter`, `AgentTool`); **Infra** provides concrete implementations.
+- **App** depends on both Core and Infra. Core never imports Infra or App — in particular, Core never names FoundationModels/AnyLanguageModel.
+
+### LLM Integration (session path)
+
+All AI features ride ONE pipeline, backed by Hugging Face's
+[AnyLanguageModel](https://github.com/huggingface/AnyLanguageModel) (a
+FoundationModels-style `LanguageModel`/`LanguageModelSession` abstraction):
+
+```
+LLMChatPanel / DeferredSessionTextCompleter
+    → LanguageModelFactory.makeModel(LLMProviderID)   [Infra]
+    → SessionAgentRunner (round loop, context threading, AgentEvents)  [Infra]
+    → LanguageModelSession + FoundationModelsToolAdapter → Core AgentTools
+```
+
+Provider mapping (`LLMProviderID` → backend): `.foundationModels` → ALM
+`SystemLanguageModel` (Apple Intelligence on-device), `.anthropic` →
+`AnthropicLanguageModel`, `.openAI` → `OpenAILanguageModel` (custom base URL
+supported), `.anyLanguageModel` → `OllamaLanguageModel` (local).
+
+Two load-bearing `SessionAgentRunner` invariants (guarded by
+`SessionContextThreadingEvals`):
+- It folds instructions + accumulated tool results into EVERY round's prompt
+  (stateless backends like Ollama drop session instructions/history).
+- It creates a FRESH `LanguageModelSession` per round and passes no
+  `instructions:` — a reused session/empty instructions serialize empty text
+  blocks that Anthropic's API rejects with 400.
 
 ### Concurrency Model
 
-- All service interfaces are **actors** (repository, search index, orchestrator, context builder, note compiler).
+- All service interfaces are **actors** (repository, search index, session agent runner, context builder, note compiler).
 - **Swift 6 strict concurrency** — all cross-isolation types must be `Sendable`.
 - Reactive updates via `AsyncStream<VaultChange>` from the document repository.
 - View models use `@Observable` on `@MainActor`.
@@ -83,15 +114,16 @@ Infra Layer (Packages/PunkRecordsInfra/) — File I/O, SQLite, LLM API clients
 | Service | Layer | Role |
 |---------|-------|------|
 | `MarkdownParser` | Core | Frontmatter, wikilinks, tags, title extraction |
-| `LLMOrchestrator` | Core | Routes queries to providers, manages fallback |
-| `ContextBuilder` | Core | Assembles document excerpts within token budget (3 tiers by context window size) |
-| `NoteCompiler` | Core | Converts LLM responses into wiki articles with proper frontmatter/links |
-| `TokenEstimator` | Core | Heuristic tokenizer (1 token ~ 4 chars) |
+| `ContextBuilder` | Core | Assembles document excerpts within token budget (3 tiers by context window size); `buildInstructions` emits the session system prompt |
+| `NoteCompiler` | Core | Converts LLM responses into wiki articles via the `TextCompleter` seam |
+| `TokenEstimator` | Core | Heuristic tokenizer (1 token ~ 4 chars); also backs session usage estimates |
+| `VaultSearchTool` / `ReadDocumentTool` / `CreateNoteTool` / `ListDocumentsTool` | Core | Agent tools wrapping repository and search |
 | `FileSystemDocumentRepository` | Infra | .md file CRUD + FSEvents file watching |
 | `SQLiteSearchIndex` | Infra | FTS5 search with BM25, backlink tracking |
-| `AgentLoop` | Core | Iterative tool-call loop: LLM → tool execution → repeat |
-| `VaultSearchTool` / `ReadDocumentTool` / `CreateNoteTool` / `ListDocumentsTool` | Core | Agent tools wrapping repository and search |
-| `AnthropicProvider` / `OpenAIProvider` / `FoundationModelsProvider` | Infra | LLM API clients (Anthropic has prompt caching + tool use) |
+| `LanguageModelFactory` | Infra | `LLMProviderID` → AnyLanguageModel backend + availability probing; UI-test scripted hook |
+| `SessionAgentRunner` | Infra | Agentic round loop over `LanguageModelSession`; emits `AgentEvent`s incl. estimated token usage |
+| `SessionTextCompleter` / `DeferredSessionTextCompleter` | Infra | `TextCompleter` over the session path; deferred variant resolves provider/config per call |
+| `ScriptedLanguageModel` | Infra | Deterministic scripted backend for evals and `--ui-testing-scripted-chat` |
 
 ### Data Storage
 
@@ -117,11 +149,11 @@ where `{note-stem}` mirrors the note's relative path with the `.md` extension re
 ### Test Organization
 
 - **Unit tests** live inside each package (`PunkRecordsCoreTests`, `PunkRecordsInfraTests`).
-- **Integration tests** (`Tests/PunkRecordsIntegrationTests/`) — document lifecycle, context building, search, orchestrator routing.
-- **Prompt evals** (`Tests/PunkRecordsPromptEvals/`) — validate LLM output structure and grounding quality (tagged `.eval`, requires API key).
-- **Agent evals** (`Tests/PunkRecordsEvalTests/`) — task completion, context builder quality, token efficiency. Uses `ScriptedProvider` for deterministic mock runs. Eval framework lives in `Packages/PunkRecordsEvals/`.
-- **UI tests** (`Tests/PunkRecordsUITests/`) — editor and chat panel interactions.
-- **Test support** (`Packages/PunkRecordsTestSupport/`) — mocks for `DocumentRepository`, `SearchService`, `LLMProvider`; `TempVaultFactory` for isolated test vaults.
+- **Integration tests** (`Tests/PunkRecordsIntegrationTests/`) — document lifecycle, context building, search.
+- **Prompt evals** (`Tests/PunkRecordsPromptEvals/`) — validate LLM output structure and grounding quality on the session path. Live tests need an API key AND `PUNKRECORDS_LIVE_EVALS=1`.
+- **Agent evals** (`Tests/PunkRecordsEvalTests/`) — task completion, context threading, token efficiency, flywheel A/B. Deterministic runs script the model with `ScriptedLanguageModel` (round-structured via `.endTurn`; `PromptLog` records per-round prompts) through the REAL `SessionAgentRunner`. Live suites are opt-in via `PUNKRECORDS_LIVE_EVALS=1`. Eval framework lives in `Packages/PunkRecordsEvals/`.
+- **UI tests** (`Tests/PunkRecordsUITests/`) — editor and chat panel interactions. `ChatTurnUITests` drives a full chat turn (send → tool chip → assistant bubble) against the scripted model via the `--ui-testing-scripted-chat` launch flag; requires an interactive session with automation permission granted.
+- **Test support** (`Packages/PunkRecordsTestSupport/`) — mocks for `DocumentRepository`, `SearchService`, `MockTextCompleter`; `TempVaultFactory` for isolated test vaults.
 
 ### Multi-Window App Structure
 
