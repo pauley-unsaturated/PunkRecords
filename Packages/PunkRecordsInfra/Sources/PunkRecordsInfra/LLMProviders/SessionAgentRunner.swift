@@ -296,8 +296,7 @@ final class ToolResultLog: @unchecked Sendable {
 ///
 /// Resync: if a snapshot is *not* an extension of the running prefix (rare model
 /// resends / corrections), the tracker resets and returns the whole new snapshot,
-/// keeping `emitted` equal to the latest snapshot text. This mirrors the
-/// prefix-diff logic in `AnyLanguageModelProvider.stream(_:)`.
+/// keeping `emitted` equal to the latest snapshot text.
 struct SnapshotDeltaTracker {
     /// The full text emitted so far (concatenation of all returned deltas).
     private(set) var emitted: String = ""

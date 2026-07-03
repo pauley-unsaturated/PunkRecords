@@ -66,7 +66,6 @@ final class AppState {
     // Dependencies — initialized lazily when a vault is opened
     private(set) var repository: FileSystemDocumentRepository?
     private(set) var searchIndex: SQLiteSearchIndex?
-    private(set) var orchestrator: LLMOrchestrator?
     private(set) var noteCompiler: NoteCompiler?
     private(set) var keychainService = KeychainService()
 
@@ -107,31 +106,16 @@ final class AppState {
             let index = try SQLiteSearchIndex(vaultRoot: url)
             self.searchIndex = index
 
-            let contextBuilder = ContextBuilder(searchService: index, repository: repo)
-            let orch = LLMOrchestrator(
-                contextBuilder: contextBuilder,
-                defaultProviderID: vault.settings.defaultLLMProvider,
-                vaultName: name
-            )
-
-            // Register providers
-            let anthropic = AnthropicProvider(keychainService: keychainService)
-            await orch.registerProvider(anthropic)
-
-            let openAI = OpenAIProvider(keychainService: keychainService)
-            await orch.registerProvider(openAI)
-
-            let foundation = FoundationModelsProvider()
-            await orch.registerProvider(foundation)
-
-            // Local models via Ollama (through Hugging Face's AnyLanguageModel).
-            // Reports available only when an Ollama server is reachable.
-            let anyLanguageModel = AnyLanguageModelProvider()
-            await orch.registerProvider(anyLanguageModel)
-
-            self.orchestrator = orch
+            // Note compilation rides the session path (the same
+            // FoundationModels/AnyLanguageModel machinery as chat). The model
+            // resolves lazily at each save/compile, so keys added in Settings
+            // take effect without reopening the vault, and a missing key
+            // surfaces from the action instead of a dead fallback.
             self.noteCompiler = NoteCompiler(
-                completer: makeNoteCompleter(provider: vault.settings.defaultLLMProvider, fallback: orch),
+                completer: DeferredSessionTextCompleter(
+                    provider: vault.settings.defaultLLMProvider,
+                    keychain: keychainService
+                ),
                 repository: repo
             )
 
@@ -320,29 +304,6 @@ final class AppState {
     var vaultChangeTick: Int = 0
 
     // MARK: - Helpers
-
-    /// Build the ``TextCompleter`` that backs ``NoteCompiler``.
-    ///
-    /// Prefers the session path (``SessionTextCompleter`` over a model from
-    /// ``LanguageModelFactory``) so "save as note" / "compile from source" route
-    /// through the same FoundationModels session machinery as chat. If the
-    /// configured provider's model can't be constructed (e.g. a remote provider
-    /// with no Keychain key), falls back to the legacy orchestrator — which also
-    /// conforms to ``TextCompleter`` — so note compilation never goes dark.
-    private func makeNoteCompleter(
-        provider: LLMProviderID,
-        fallback: LLMOrchestrator
-    ) -> any TextCompleter {
-        do {
-            let model = try LanguageModelFactory.makeModel(
-                for: provider,
-                keychain: keychainService
-            )
-            return SessionTextCompleter(model: model)
-        } catch {
-            return fallback
-        }
-    }
 
     private func pathTitle(for doc: Document) -> String {
         ((doc.path as NSString).lastPathComponent as NSString).deletingPathExtension
