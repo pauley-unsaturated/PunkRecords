@@ -93,6 +93,9 @@ public enum LanguageModelFactory {
         keychain: KeychainService,
         config: Config = Config()
     ) throws -> any AnyLanguageModel.LanguageModel {
+        if isUITestingScriptedChat {
+            return makeUITestScriptedModel()
+        }
         switch provider {
         case .anyLanguageModel:
             return OllamaLanguageModel(baseURL: config.ollamaEndpoint, model: config.ollamaModel)
@@ -144,6 +147,7 @@ public enum LanguageModelFactory {
         keychain: KeychainService,
         config: Config = Config()
     ) async -> Bool {
+        if isUITestingScriptedChat { return true }
         switch provider {
         case .anyLanguageModel:
             return await ollamaReachable(config.ollamaEndpoint)
@@ -180,6 +184,27 @@ public enum LanguageModelFactory {
     private static func systemModelAvailable() -> Bool {
         if case .available = SystemLanguageModel().availability { return true }
         return false
+    }
+
+    // MARK: - UI-testing scripted mode
+
+    /// When the app is launched with `--ui-testing-scripted-chat`, every
+    /// provider resolves to a deterministic ``ScriptedLanguageModel`` (no
+    /// network, no keys) and reports itself available, so XCUITests can drive
+    /// a full chat turn — send → tool chip → assistant bubble — through the
+    /// real `SessionAgentRunner` and real vault tools with a canned model.
+    static var isUITestingScriptedChat: Bool {
+        ProcessInfo.processInfo.arguments.contains("--ui-testing-scripted-chat")
+    }
+
+    /// One vault_search tool round, then a fixed answer. A fresh instance per
+    /// `makeModel` call means each chat turn replays the script from the top.
+    static func makeUITestScriptedModel() -> any AnyLanguageModel.LanguageModel {
+        ScriptedLanguageModel(script: [
+            .callTool(name: "vault_search", arguments: ["query": .string("test note")]),
+            .endTurn,
+            .emitText("Scripted response: vault search completed."),
+        ])
     }
 
     // MARK: - Helpers

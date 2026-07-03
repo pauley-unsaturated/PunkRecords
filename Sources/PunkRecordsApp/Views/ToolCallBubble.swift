@@ -24,6 +24,8 @@ struct ToolCallBubble: View {
         .padding(8)
         .background(Color.accentColor.opacity(0.06), in: .rect(cornerRadius: 8))
         .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("toolCallBubble")
     }
 
     private var header: some View {

@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import PunkRecordsCore
 import PunkRecordsEvals
+import PunkRecordsInfra
 
 /// Evaluates turn/tool efficiency and metric aggregation on the **session path**
 /// (`ScriptedLanguageModel` → `SessionAgentRunner`).

@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import PunkRecordsCore
 import PunkRecordsEvals
+import PunkRecordsInfra
 
 /// Agent task completion evals — runs scenarios against the **session path**
 /// (`ScriptedLanguageModel` → `SessionAgentRunner`, the engine the app ships)

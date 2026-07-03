@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import PunkRecordsCore
 import PunkRecordsEvals
+import PunkRecordsInfra
 
 /// Tests for the flywheel infrastructure: variant storage, report persistence, A/B comparison.
 @Suite("Flywheel")
