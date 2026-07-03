@@ -13,17 +13,19 @@ struct LLMChatPanel: View {
     @AppStorage("chatProviderID") private var chatProviderRaw: String = LLMProviderID.anthropic.rawValue
     @AppStorage("ollama.model") private var ollamaModel = "qwen3"
     @AppStorage("ollama.baseURL") private var ollamaBaseURL = "http://localhost:11434"
+    @AppStorage("openai.baseURL") private var openAIBaseURL = ""
 
     private var selectedProviderID: LLMProviderID {
         LLMProviderID(rawValue: chatProviderRaw) ?? .anthropic
     }
 
-    /// Local-model config (Ollama endpoint + model) sourced from Settings, used
-    /// both to decide availability and to build the backing model for a turn.
+    /// Endpoint/model config sourced from Settings, used both to decide
+    /// availability and to build the backing model for a turn.
     private var factoryConfig: LanguageModelFactory.Config {
         LanguageModelFactory.Config(
             ollamaModel: ollamaModel.isEmpty ? "qwen3" : ollamaModel,
-            ollamaEndpoint: URL(string: ollamaBaseURL) ?? URL(string: "http://localhost:11434")!
+            ollamaEndpoint: URL(string: ollamaBaseURL) ?? URL(string: "http://localhost:11434")!,
+            openAIEndpoint: openAIBaseURL.isEmpty ? nil : URL(string: openAIBaseURL)
         )
     }
 
@@ -140,7 +142,7 @@ struct LLMChatPanel: View {
                 .font(.caption)
         }
         .menuStyle(.borderlessButton)
-        .help("Choose the LLM provider for this conversation. \u{2318}1/2/3 to switch.")
+        .help("Choose the LLM provider for this conversation. \u{2318}1/2/3/4 to switch.")
         .accessibilityIdentifier("chatProviderPicker")
     }
 
@@ -152,6 +154,7 @@ struct LLMChatPanel: View {
             providerShortcutButton(.foundationModels, key: "1")
             providerShortcutButton(.anthropic, key: "2")
             providerShortcutButton(.openAI, key: "3")
+            providerShortcutButton(.anyLanguageModel, key: "4")
         }
         .frame(width: 0, height: 0)
         .hidden()

@@ -22,6 +22,9 @@ struct PromptEvalTests {
 
     // MARK: - Fixtures
 
+    /// Live tests are opt-in (real API cost): set PUNKRECORDS_LIVE_EVALS=1.
+    static let liveEvalsEnabled = ProcessInfo.processInfo.environment["PUNKRECORDS_LIVE_EVALS"] == "1"
+
     static let keychain = KeychainService()
 
     /// Sample documents representing a realistic vault for context building.
@@ -163,7 +166,7 @@ struct PromptEvalTests {
 
     // MARK: - KB Query (Chat)
 
-    @Test("KB query returns relevant, grounded response", .tags(.eval))
+    @Test("KB query returns relevant, grounded response", .tags(.eval), .enabled(if: PromptEvalTests.liveEvalsEnabled))
     func kbQueryEval() async throws {
         try Self.requireAPIKey()
 
@@ -203,7 +206,7 @@ struct PromptEvalTests {
 
     // MARK: - Save Response As Note
 
-    @Test("saveResponseAsNote produces well-structured wiki article", .tags(.eval))
+    @Test("saveResponseAsNote produces well-structured wiki article", .tags(.eval), .enabled(if: PromptEvalTests.liveEvalsEnabled))
     func saveAsNoteEval() async throws {
         try Self.requireAPIKey()
 
@@ -257,7 +260,7 @@ struct PromptEvalTests {
 
     // MARK: - Compile From Source
 
-    @Test("compileFromSource produces structured wiki from raw material", .tags(.eval))
+    @Test("compileFromSource produces structured wiki from raw material", .tags(.eval), .enabled(if: PromptEvalTests.liveEvalsEnabled))
     func compileFromSourceEval() async throws {
         try Self.requireAPIKey()
 
@@ -321,7 +324,7 @@ struct PromptEvalTests {
 
     // MARK: - Prompt Regression: System Prompt Doesn't Leak
 
-    @Test("LLM response doesn't echo back the system prompt")
+    @Test("LLM response doesn't echo back the system prompt", .enabled(if: PromptEvalTests.liveEvalsEnabled))
     func noSystemPromptLeakage() async throws {
         try Self.requireAPIKey()
 

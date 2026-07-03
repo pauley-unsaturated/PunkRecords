@@ -107,13 +107,18 @@ final class AppState {
             self.searchIndex = index
 
             // Note compilation rides the session path (the same
-            // FoundationModels/AnyLanguageModel machinery as chat). The model
-            // resolves lazily at each save/compile, so keys added in Settings
-            // take effect without reopening the vault, and a missing key
-            // surfaces from the action instead of a dead fallback.
+            // FoundationModels/AnyLanguageModel machinery as chat) and follows
+            // the SAME provider selection as the chat panel, resolved lazily
+            // at each save/compile — so provider switches, new API keys, and
+            // endpoint changes apply without reopening the vault, and a
+            // missing key surfaces from the action instead of a dead fallback.
+            let fallbackProvider = vault.settings.defaultLLMProvider
             self.noteCompiler = NoteCompiler(
                 completer: DeferredSessionTextCompleter(
-                    provider: vault.settings.defaultLLMProvider,
+                    provider: { @Sendable in
+                        UserDefaults.standard.string(forKey: "chatProviderID")
+                            .flatMap(LLMProviderID.init(rawValue:)) ?? fallbackProvider
+                    },
                     keychain: keychainService
                 ),
                 repository: repo

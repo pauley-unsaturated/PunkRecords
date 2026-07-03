@@ -63,27 +63,64 @@ final class ChatTurnUITests: XCTestCase {
 
     // MARK: - Provider picker states
 
-    func testProviderPickerListsAllProvidersEnabled() throws {
+    func testProviderPickerListsAndSwitchesProviders() throws {
         // Under scripted mode every provider reports available, so the menu's
-        // contents are deterministic: all four entries, none "(not configured)".
+        // contents are deterministic: all four entries listed and selectable.
+        // Neither `isEnabled` nor the picker's label is reliably surfaced
+        // through accessibility for SwiftUI menus, so assert BEHAVIOR: after
+        // selecting a provider, the next assistant message must be attributed
+        // to it ("via Ollama") — a disabled item can't change the selection.
         // (On macOS the pickers surface under the panel's container identifier,
         // provider picker first in document order.)
         let providerMenu = app.menuButtons.matching(identifier: "chatPanel").element(boundBy: 0)
         XCTAssertTrue(providerMenu.waitForExistence(timeout: 3),
                       "Provider picker should exist in the chat header")
+
         providerMenu.click()
-
         for name in ["Apple", "Claude", "GPT", "Ollama"] {
-            let item = app.menuItems[name]
-            XCTAssertTrue(item.waitForExistence(timeout: 3),
+            XCTAssertTrue(app.menuItems[name].waitForExistence(timeout: 3),
                           "\(name) should be listed in the provider menu")
-            XCTAssertTrue(item.isEnabled,
-                          "\(name) should be enabled when the factory reports it available")
         }
-        XCTAssertFalse(app.menuItems.matching(
-            NSPredicate(format: "title CONTAINS %@", "not configured")).firstMatch.exists,
-            "No provider should show '(not configured)' under scripted mode")
-
         app.typeKey(.escape, modifierFlags: [])
+
+        // Availability populates asynchronously (items stay disabled until the
+        // first probe lands), so retry. Type BEFORE touching the menu — menu
+        // interaction steals keyboard focus from the field — then select the
+        // provider and send.
+        var attributed = false
+        for attempt in 0..<5 where !attributed {
+            let input = app.textFields["Ask about your vault..."]
+            XCTAssertTrue(input.waitForExistence(timeout: 3))
+            input.click()
+            input.typeText("attribution check \(attempt)")
+
+            providerMenu.click()
+            let item = app.menuItems["Ollama"]
+            guard item.waitForExistence(timeout: 2) else {
+                app.typeKey(.escape, modifierFlags: [])
+                Thread.sleep(forTimeInterval: 1)
+                continue
+            }
+            item.click()
+
+            app.buttons["Send message"].click()
+
+            // A no-op selection (item still disabled) sends attributed to the
+            // previous provider; retry with a fresh message in that case.
+            attributed = app.staticTexts["via Ollama"].waitForExistence(timeout: 8)
+            if !attributed { Thread.sleep(forTimeInterval: 2) }
+        }
+        XCTAssertTrue(attributed,
+                      "After selecting Ollama, the assistant reply should be attributed 'via Ollama'")
+
+        // Leave the persisted selection on the default (Claude). firstMatch:
+        // after messages exist, more than one element can carry the title.
+        providerMenu.click()
+        let claudeItem = app.menuItems["Claude"].firstMatch
+        if claudeItem.waitForExistence(timeout: 2) {
+            claudeItem.click()
+        } else {
+            app.typeKey(.escape, modifierFlags: [])
+        }
     }
 }

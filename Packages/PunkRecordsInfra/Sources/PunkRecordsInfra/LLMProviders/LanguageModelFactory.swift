@@ -53,20 +53,41 @@ public enum LanguageModelFactory {
         public var ollamaEndpoint: URL
         /// Model identifier for the OpenAI backend (`.openAI`).
         public var openAIModel: String
-        /// Model identifier for the Anthropic backend (`.anthropic`). Defaults to
-        /// the same Claude model the legacy `AnthropicProvider` uses.
+        /// Endpoint override for the OpenAI backend — any OpenAI-compatible
+        /// server (LM Studio, vLLM, …). `nil` means the official API.
+        public var openAIEndpoint: URL?
+        /// Model identifier for the Anthropic backend (`.anthropic`).
         public var claudeModel: String
 
         public init(
             ollamaModel: String = "qwen3",
             ollamaEndpoint: URL = URL(string: "http://localhost:11434")!,
             openAIModel: String = "gpt-4o",
+            openAIEndpoint: URL? = nil,
             claudeModel: String = "claude-sonnet-4-6"
         ) {
             self.ollamaModel = ollamaModel
             self.ollamaEndpoint = ollamaEndpoint
             self.openAIModel = openAIModel
+            self.openAIEndpoint = openAIEndpoint
             self.claudeModel = claudeModel
+        }
+
+        /// Build a config from the app's persisted settings (the `@AppStorage`
+        /// keys `SettingsView` writes), so non-view call sites resolve the
+        /// same endpoints the UI configured.
+        public static func fromUserDefaults(_ defaults: UserDefaults = .standard) -> Config {
+            var config = Config()
+            if let model = defaults.string(forKey: "ollama.model"), !model.isEmpty {
+                config.ollamaModel = model
+            }
+            if let raw = defaults.string(forKey: "ollama.baseURL"), let url = URL(string: raw), !raw.isEmpty {
+                config.ollamaEndpoint = url
+            }
+            if let raw = defaults.string(forKey: "openai.baseURL"), let url = URL(string: raw), !raw.isEmpty {
+                config.openAIEndpoint = url
+            }
+            return config
         }
     }
 
@@ -102,6 +123,9 @@ public enum LanguageModelFactory {
 
         case .openAI:
             let key = try requireKey(from: keychain, provider: "openai")
+            if let endpoint = config.openAIEndpoint {
+                return OpenAILanguageModel(baseURL: endpoint, apiKey: key, model: config.openAIModel)
+            }
             return OpenAILanguageModel(apiKey: key, model: config.openAIModel)
 
         case .foundationModels:

@@ -30,11 +30,13 @@ private struct GeneralSettingsTab: View {
     var body: some View {
         Form {
             Section("AI") {
-                Picker("Default provider", selection: $chatProviderRaw) {
+                Picker("Provider", selection: $chatProviderRaw) {
                     ForEach(LLMProviderID.allCases, id: \.rawValue) { id in
                         Text(id.displayName).tag(id.rawValue)
                     }
                 }
+                .help("Backs chat and note compilation alike. The chat panel's "
+                    + "picker changes this same selection.")
             }
         }
         .formStyle(.grouped)
@@ -46,12 +48,13 @@ private struct GeneralSettingsTab: View {
 private struct ProvidersSettingsTab: View {
     @State private var anthropicKey = ""
     @State private var openAIKey = ""
-    @State private var openAIBaseURL = "https://api.openai.com/v1"
     @State private var showSaveConfirmation = false
-    // Local-model config persists immediately (no key to store), so it lives in
-    // AppStorage and is shared with the chat panel via the same keys.
+    // Endpoint config persists immediately (no key to store), so it lives in
+    // AppStorage and is shared with the chat panel / model factory via the
+    // same keys. Empty OpenAI base URL means the official endpoint.
     @AppStorage("ollama.model") private var ollamaModel = "qwen3"
     @AppStorage("ollama.baseURL") private var ollamaBaseURL = "http://localhost:11434"
+    @AppStorage("openai.baseURL") private var openAIBaseURL = ""
     private let keychainService = KeychainService()
 
     var body: some View {
@@ -79,8 +82,9 @@ private struct ProvidersSettingsTab: View {
                     .onAppear {
                         openAIKey = (try? keychainService.apiKey(for: "openai")) ?? ""
                     }
-                TextField("Base URL", text: $openAIBaseURL)
-                    .help("Use http://localhost:11434/v1 for Ollama, http://localhost:1234/v1 for LM Studio")
+                TextField("Base URL (blank = api.openai.com)", text: $openAIBaseURL)
+                    .help("Any OpenAI-compatible endpoint, e.g. http://localhost:1234/v1 for "
+                        + "LM Studio. Leave blank for the official OpenAI API.")
             }
 
             Section("Apple Intelligence — on-device") {

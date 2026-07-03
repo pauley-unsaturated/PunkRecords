@@ -10,14 +10,21 @@ import PunkRecordsEvals
 /// `SessionAgentRunner` (via `EvalHarness.runLiveSession`) — against the real
 /// Anthropic / OpenAI APIs.
 ///
-/// Tagged `.eval` so they only run intentionally (they cost real money) and
-/// `.serialized` to avoid hammering the provider concurrently.
+/// Opt-in only: set `PUNKRECORDS_LIVE_EVALS=1` to run (they cost real money —
+/// the default test invocation must make zero network LLM calls even when API
+/// keys are in the keychain). Also `.serialized` to avoid hammering the
+/// provider concurrently.
 ///
 /// Capabilities the deleted legacy live suite covered that have no session
 /// analogue yet: prompt-cache accounting (PUNK-4bu — AnyLanguageModel exposes
 /// no usage surface) and Anthropic's native `web_search` server tool
 /// (PUNK-e5u tracks a provider-agnostic replacement).
-@Suite("Live Session Agent Evals", .tags(.eval), .serialized)
+@Suite(
+    "Live Session Agent Evals",
+    .tags(.eval),
+    .serialized,
+    .enabled(if: ProcessInfo.processInfo.environment["PUNKRECORDS_LIVE_EVALS"] == "1")
+)
 struct LiveSessionAgentEvals {
 
     static let keychain = KeychainService()
