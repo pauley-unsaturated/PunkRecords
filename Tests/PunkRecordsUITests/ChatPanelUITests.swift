@@ -87,6 +87,18 @@ final class ChatPanelUITests: XCTestCase {
                       "Opening the chat panel should reveal its header menu controls (provider picker)")
     }
 
+    func testAttachmentControlsVisibleInComposer() throws {
+        app.buttons["AI Chat"].click()
+
+        let attachButton = app.buttons["Attach File"]
+        XCTAssertTrue(attachButton.waitForExistence(timeout: 3),
+                      "Chat composer should expose an attachment button")
+
+        let tokenEstimate = app.otherElements["Estimated tokens"]
+        XCTAssertTrue(tokenEstimate.waitForExistence(timeout: 3),
+                      "Chat composer should show a live token estimate")
+    }
+
     // MARK: - Ask AI on Selection
 
     func testAskAIContextMenuPopulatesChat() throws {

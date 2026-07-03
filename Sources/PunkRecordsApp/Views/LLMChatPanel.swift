@@ -10,6 +10,14 @@ struct LLMChatPanel: View {
     @State private var isStreaming = false
     @State private var scope: QueryScope = .global
     @State private var availableProviders: [LLMProviderID] = []
+    @State private var pendingAttachments: [PendingChatAttachment] = []
+    @State private var isAttachmentImporterPresented = false
+    @State private var isAttachmentDropTargeted = false
+    @State private var isShowingAttachmentError = false
+    @State private var attachmentErrorMessage = ""
+    @State private var isShowingSendConfirmation = false
+    @State private var deferredSendText = ""
+    @State private var deferredSendAttachments: [PendingChatAttachment] = []
     @AppStorage("chatProviderID") private var chatProviderRaw: String = LLMProviderID.anthropic.rawValue
     @AppStorage("ollama.model") private var ollamaModel = "qwen3"
     @AppStorage("ollama.baseURL") private var ollamaBaseURL = "http://localhost:11434"
@@ -90,24 +98,7 @@ struct LLMChatPanel: View {
 
             Divider()
 
-            // Input
-            HStack {
-                TextField("Ask about your vault...", text: $prompt, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...5)
-                    .onSubmit { Task { await sendMessage() } }
-
-                Button {
-                    Task { await sendMessage() }
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
-                }
-                .buttonStyle(.borderless)
-                .disabled(prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isStreaming)
-                .accessibilityLabel("Send message")
-            }
-            .padding()
+            chatComposer
         }
         .frame(minWidth: 300, idealWidth: 350)
         .onChange(of: appState.askAIText) { _, newValue in
@@ -116,6 +107,94 @@ struct LLMChatPanel: View {
                 appState.askAIText = nil
                 scope = .selection
             }
+        }
+        .fileImporter(
+            isPresented: $isAttachmentImporterPresented,
+            allowedContentTypes: PendingChatAttachment.allowedContentTypes,
+            allowsMultipleSelection: true,
+            onCompletion: handleAttachmentImport
+        )
+        .alert("Attachment Error", isPresented: $isShowingAttachmentError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(attachmentErrorMessage)
+        }
+        .alert("Large chat submission", isPresented: $isShowingSendConfirmation) {
+            Button("Send", role: .destructive) {
+                Task {
+                    await sendMessage(
+                        text: deferredSendText,
+                        attachments: deferredSendAttachments
+                    )
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This message is estimated at \(formattedTokenEstimate) tokens or includes a file larger than 20 MB.")
+        }
+    }
+
+    private var chatComposer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !pendingAttachments.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 6) {
+                        ForEach(pendingAttachments) { attachment in
+                            ChatAttachmentChip(metadata: attachment.metadata) {
+                                removeAttachment(id: attachment.id)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 1)
+                }
+                .scrollIndicators(.hidden)
+                .accessibilityIdentifier("chatAttachmentChips")
+            }
+
+            Text("Estimated: ~\(formattedTokenEstimate) tokens")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Estimated tokens")
+                .accessibilityValue(formattedTokenEstimate)
+                .accessibilityIdentifier("chatTokenEstimate")
+
+            HStack(alignment: .bottom, spacing: 8) {
+                Button("Attach File", systemImage: "paperclip", action: openAttachmentImporter)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .keyboardShortcut("A", modifiers: [.command, .shift])
+                    .help("Attach files")
+                    .accessibilityLabel("Attach File")
+                    .accessibilityIdentifier("chatAttachButton")
+
+                TextField("Ask about your vault...", text: $prompt, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...5)
+                    .onSubmit(queueSendMessage)
+
+                Button("Send message", systemImage: "arrow.up.circle.fill", action: queueSendMessage)
+                    .labelStyle(.iconOnly)
+                    .font(.title2)
+                    .buttonStyle(.borderless)
+                    .disabled(!canSendMessage)
+                    .accessibilityIdentifier("chatSendButton")
+            }
+        }
+        .padding()
+        .overlay {
+            if isAttachmentDropTargeted {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                    .background(Color.accentColor.opacity(0.08), in: .rect(cornerRadius: 8))
+                    .accessibilityLabel("Drop files to attach")
+            }
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            addAttachmentURLs(urls)
+            return true
+        } isTargeted: { isTargeted in
+            isAttachmentDropTargeted = isTargeted
         }
     }
 
@@ -200,13 +279,51 @@ struct LLMChatPanel: View {
         }
     }
 
-    private func sendMessage() async {
-        let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+    private var canSendMessage: Bool {
+        (!prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) && !isStreaming
+    }
 
-        let userMessage = ChatMessage(role: .user, content: text)
+    private var formattedTokenEstimate: String {
+        let estimate = ChatAttachmentPolicy.estimatedTokens(
+            prompt: prompt,
+            attachments: pendingAttachments.map(\.metadata)
+        )
+        return estimate.formatted(.number.notation(.compactName))
+    }
+
+    private func queueSendMessage() {
+        let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty || !pendingAttachments.isEmpty else { return }
+
+        if ChatAttachmentPolicy.needsConfirmation(
+            prompt: text,
+            attachments: pendingAttachments.map(\.metadata)
+        ) {
+            deferredSendText = text
+            deferredSendAttachments = pendingAttachments
+            isShowingSendConfirmation = true
+            return
+        }
+
+        Task {
+            await sendMessage(text: text, attachments: pendingAttachments)
+        }
+    }
+
+    private func sendMessage(text: String, attachments: [PendingChatAttachment]) async {
+        guard !text.isEmpty || !attachments.isEmpty else { return }
+
+        let attachmentMetadata = attachments.map(\.metadata)
+        let attachmentTranscript = (try? ChatAttachmentPolicy.transcriptComments(for: attachmentMetadata)) ?? ""
+        let userMessage = ChatMessage(
+            role: .user,
+            content: text,
+            attachments: attachmentMetadata,
+            attachmentTranscript: attachmentTranscript
+        )
         messages.append(userMessage)
         prompt = ""
+        pendingAttachments = []
 
         // Snapshot the submission context. Attached to the assistant message so
         // "Report Issue" can later reconstruct the full state that produced the response.
@@ -222,6 +339,38 @@ struct LLMChatPanel: View {
         isStreaming = true
         await sendAgentMessage(text, context: context)
         isStreaming = false
+    }
+
+    private func openAttachmentImporter() {
+        isAttachmentImporterPresented = true
+    }
+
+    private func handleAttachmentImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            addAttachmentURLs(urls)
+        case .failure(let error):
+            showAttachmentError(error.localizedDescription)
+        }
+    }
+
+    private func addAttachmentURLs(_ urls: [URL]) {
+        do {
+            for url in urls where !pendingAttachments.contains(where: { $0.url == url }) {
+                pendingAttachments.append(try PendingChatAttachment.make(for: url))
+            }
+        } catch {
+            showAttachmentError(error.localizedDescription)
+        }
+    }
+
+    private func removeAttachment(id: UUID) {
+        pendingAttachments.removeAll { $0.id == id }
+    }
+
+    private func showAttachmentError(_ message: String) {
+        attachmentErrorMessage = message
+        isShowingAttachmentError = true
     }
 
     /// Conservative context-window budget per provider, used to size the
@@ -294,7 +443,7 @@ struct LLMChatPanel: View {
             // Index of the current assistant text bubble being appended to. nil after a tool
             // call, which forces the next textToken to start a fresh bubble — so tool calls
             // visually break up the assistant's narration.
-            var currentAssistantIndex: Int? = nil
+            var currentAssistantIndex: Int?
 
             for try await event in stream {
                 switch event {
@@ -400,16 +549,18 @@ struct ChatMessage: Identifiable {
     let id = UUID()
     let role: Role
     var content: String
+    var attachments: [ChatAttachmentMetadata] = []
+    var attachmentTranscript = ""
     let timestamp: Date = Date()
     /// For assistant messages: snapshot of what the user did when submitting the
     /// triggering prompt. Used by the "Report Issue" flow to reconstruct context.
-    var context: MessageContext? = nil
+    var context: MessageContext?
     /// Populated when role == .tool — the agent tool invocation this row represents.
-    var toolCall: ToolCallInfo? = nil
+    var toolCall: ToolCallInfo?
     /// For assistant messages: which provider produced this output. Drives the
     /// "via Claude / GPT / Apple" attribution chip and lets future "rerun with
     /// a different model" actions know what to switch *from*.
-    var providerID: LLMProviderID? = nil
+    var providerID: LLMProviderID?
 
     enum Role {
         case user, assistant, tool
@@ -424,13 +575,32 @@ private struct ChatBubble: View {
 
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
-            Group {
-                if message.role == .assistant {
-                    Markdown(message.content)
-                        .markdownTheme(.gitHub)
-                        .markdownTextStyle(\.text) { FontSize(.em(0.9)) }
-                } else {
-                    Text(message.content)
+            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 8) {
+                if !message.content.isEmpty {
+                    Group {
+                        if message.role == .assistant {
+                            Markdown(message.content)
+                                .markdownTheme(.gitHub)
+                                .markdownTextStyle(\.text) { FontSize(.em(0.9)) }
+                        } else {
+                            Text(message.content)
+                        }
+                    }
+                    .textSelection(.enabled)
+                }
+
+                if !message.attachments.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(message.attachments) { attachment in
+                            Label(
+                                "\(attachment.filename) · \(formattedByteCount(for: attachment))",
+                                systemImage: iconName(for: attachment.type)
+                            )
+                            .font(.caption)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        }
+                    }
                 }
             }
             .padding(10)
@@ -440,7 +610,6 @@ private struct ChatBubble: View {
                     : Color.secondary.opacity(0.1),
                 in: .rect(cornerRadius: 10)
             )
-            .textSelection(.enabled)
 
             if message.role == .assistant && !message.content.isEmpty {
                 HStack(spacing: 8) {
@@ -484,5 +653,17 @@ private struct ChatBubble: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
+    }
+
+    private func iconName(for type: ChatAttachmentType) -> String {
+        switch type {
+        case .text: "doc.text"
+        case .pdf: "doc.richtext"
+        case .image: "photo"
+        }
+    }
+
+    private func formattedByteCount(for attachment: ChatAttachmentMetadata) -> String {
+        ByteCountFormatter.string(fromByteCount: attachment.byteCount, countStyle: .file)
     }
 }
