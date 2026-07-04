@@ -15,7 +15,7 @@ struct ChatAttachmentChip: View {
                 Text(metadata.filename)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text(byteCountText)
+                Text(detailText)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -33,7 +33,7 @@ struct ChatAttachmentChip: View {
         .padding(.vertical, 6)
         .background(.quaternary, in: .rect(cornerRadius: 8))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(metadata.type.displayName) attachment \(metadata.filename), \(byteCountText)")
+        .accessibilityLabel("\(metadata.type.displayName) attachment \(metadata.filename), \(detailText)")
     }
 
     private var iconName: String {
@@ -46,5 +46,12 @@ struct ChatAttachmentChip: View {
 
     private var byteCountText: String {
         ByteCountFormatter.string(fromByteCount: metadata.byteCount, countStyle: .file)
+    }
+
+    private var detailText: String {
+        if let processingNote = metadata.processingNote {
+            return "\(processingNote) · \(byteCountText)"
+        }
+        return byteCountText
     }
 }

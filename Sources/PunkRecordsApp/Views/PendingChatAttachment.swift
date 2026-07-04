@@ -41,6 +41,12 @@ struct PendingChatAttachment: Equatable, Identifiable {
             )
             return PendingChatAttachment(url: url, metadata: payload.metadata, warning: payload.warning)
         }
+        if attachmentType == .pdf {
+            let payload = try PDFChatAttachmentHandler.payload(
+                for: PDFChatAttachmentInput(url: url, metadata: metadata)
+            )
+            return PendingChatAttachment(url: url, metadata: payload.metadata, warning: payload.warning)
+        }
 
         return PendingChatAttachment(url: url, metadata: metadata, warning: nil)
     }
