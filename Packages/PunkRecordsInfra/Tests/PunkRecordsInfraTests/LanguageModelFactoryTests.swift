@@ -102,4 +102,12 @@ struct LanguageModelFactoryTests {
             _ = try LanguageModelFactory.makeModel(for: .openAI, keychain: keychain)
         }
     }
+
+    @Test("Remote providers are available without stored keys")
+    func remoteProvidersDoNotRequireKeysForAvailability() async {
+        let keychain = makeKeychain()
+
+        #expect(await LanguageModelFactory.isAvailable(.anthropic, keychain: keychain))
+        #expect(await LanguageModelFactory.isAvailable(.openAI, keychain: keychain))
+    }
 }

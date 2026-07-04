@@ -149,11 +149,10 @@ public enum LanguageModelFactory {
 
     // MARK: - Availability
 
-    /// The providers this factory can currently build a usable model for — i.e.
-    /// the ones the chat UI should leave selectable. This reflects the SESSION
-    /// path: a remote provider is available
-    /// when its API key is stored, the local Ollama provider when its server
-    /// answers, and the on-device provider when Apple reports the model ready.
+    /// The providers this factory can currently offer in the UI. This deliberately
+    /// does not read Keychain for remote providers: credentials are required only
+    /// when ``makeModel(for:keychain:config:)`` actually builds an OpenAI or
+    /// Anthropic model for a turn.
     public static func availableProviders(
         keychain: KeychainService,
         config: Config = Config()
@@ -165,7 +164,9 @@ public enum LanguageModelFactory {
         return result
     }
 
-    /// Whether `provider` can be constructed and used right now.
+    /// Whether `provider` should be offered right now without prompting for
+    /// credentials. Local providers may still be probed; remote providers are
+    /// selectable and defer Keychain reads until model construction.
     public static func isAvailable(
         _ provider: LLMProviderID,
         keychain: KeychainService,
@@ -176,16 +177,12 @@ public enum LanguageModelFactory {
         case .anyLanguageModel:
             return await ollamaReachable(config.ollamaEndpoint)
         case .openAI:
-            return hasKey(keychain, "openai")
+            return true
         case .anthropic:
-            return hasKey(keychain, "anthropic")
+            return true
         case .foundationModels:
             return systemModelAvailable()
         }
-    }
-
-    private static func hasKey(_ keychain: KeychainService, _ provider: String) -> Bool {
-        ((try? keychain.apiKey(for: provider)) ?? nil)?.isEmpty == false
     }
 
     /// Probe the Ollama server's `/api/tags` with a short timeout. Any reachable

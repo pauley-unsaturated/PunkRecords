@@ -249,8 +249,8 @@ struct LLMChatPanel: View {
     }
 
     private func refreshAvailableProviders() async {
-        // A provider is selectable when LanguageModelFactory can actually build
-        // and use it (key stored / Ollama reachable / on-device model ready).
+        // Local providers can be probed here, but remote providers intentionally
+        // do not read Keychain until a turn actually builds the model.
         availableProviders = await LanguageModelFactory.availableProviders(
             keychain: appState.keychainService,
             config: factoryConfig
