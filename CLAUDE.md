@@ -25,8 +25,13 @@ xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -o
 # Run a single test class or method
 xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -only-testing:PunkRecordsIntegrationTests/ContextBuilderTests/testSmallTier
 
-# Live LLM evals (real API calls, real cost) are opt-in via env flag:
-PUNKRECORDS_LIVE_EVALS=1 xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -only-testing:PunkRecordsEvalTests/LiveSessionAgentEvals
+# Live LLM evals (real API calls, real cost) are opt-in via env flag. Under
+# xcodebuild the TEST_RUNNER_ prefix is REQUIRED — plain env vars never reach
+# the test process and the suites silently skip ("Executed 0 tests"):
+TEST_RUNNER_PUNKRECORDS_LIVE_EVALS=1 xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -only-testing:PunkRecordsEvalTests/LiveSessionAgentEvals
+
+# Live evals against a real on-disk vault (ALWAYS a disposable copy — create_note writes):
+TEST_RUNNER_PUNKRECORDS_LIVE_EVALS=1 TEST_RUNNER_PUNKRECORDS_EVAL_VAULT=/path/to/vault-copy xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -only-testing:PunkRecordsEvalTests/LiveMusicDSPEvals
 
 # Lint (style backstop) — run before committing; --strict turns warnings into errors
 swiftlint
