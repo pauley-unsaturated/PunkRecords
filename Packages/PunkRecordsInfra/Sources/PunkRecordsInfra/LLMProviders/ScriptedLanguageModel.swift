@@ -16,9 +16,10 @@ import Foundation
 /// calls). A script with no `.endTurn` is a single round; once the script is
 /// exhausted, further rounds return no text.
 ///
-/// To simulate a multi-round agent, make every round before the last tool-only
-/// (no `.emitText`), because the runner treats ANY returned text as the final
-/// answer and stops looping — exactly like the shipping path.
+/// A round's text ends the runner's loop only when that round ran NO tools
+/// (PUNK-dpl): a round mixing `.emitText` and `.callTool` is treated as
+/// narration — surfaced as progress text, folded into the next round's prompt —
+/// and the loop continues. To end a scripted run, finish with a text-only round.
 ///
 /// ## Why this conforms cleanly
 /// - `UnavailableReason == Never`, so the `LanguageModel where UnavailableReason

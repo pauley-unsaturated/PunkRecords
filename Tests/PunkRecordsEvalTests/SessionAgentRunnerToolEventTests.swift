@@ -49,15 +49,17 @@ struct SessionAgentRunnerToolEventTests {
     func toolEventsInOrder() async throws {
         let (_, _, tools) = await makeTools()
 
-        // One round mixing narration and a tool call. The runner drives one
-        // `respond` per round: the session resolves the tool call (firing
-        // toolStart/toolEnd mid-round) and the round's text arrives as a single
-        // textToken AFTER respond returns — so tools precede text, and real turn
-        // boundaries bracket the round.
+        // Round 0 mixes narration and a tool call — under the PUNK-dpl rule the
+        // runner surfaces that text as progress and keeps looping; round 1 is
+        // text-only, which ends the run. Within a round the session resolves the
+        // tool call (firing toolStart/toolEnd mid-round) and the round's text
+        // arrives as a single textToken AFTER respond returns — so tools precede
+        // text, and real turn boundaries bracket each round.
         let model = ScriptedLanguageModel(script: [
-            .emitText("I'll search the vault for that.\n"),
+            .emitText("I'll search the vault for that."),
             .callTool(name: "vault_search", arguments: ["query": .string("swift concurrency")]),
-            .emitText("\nBased on the results, Swift's actor model…"),
+            .endTurn,
+            .emitText("Based on the results, Swift's actor model…"),
         ])
 
         let runner = SessionAgentRunner(model: model, instructions: "system", tools: tools)
@@ -93,6 +95,9 @@ struct SessionAgentRunnerToolEventTests {
             "end(vault_search,err=false)",
             "text",
             "turnEnd(0)",
+            "turnStart(1)",
+            "text",
+            "turnEnd(1)",
             "done",
         ])
 
@@ -126,6 +131,47 @@ struct SessionAgentRunnerToolEventTests {
         }
 
         #expect(sawError)
+    }
+
+    @Test("Narrated tool round continues the loop; final text wins (PUNK-dpl)")
+    func narratedToolRoundContinues() async throws {
+        let (_, _, tools) = await makeTools()
+
+        let promptLog = ScriptedLanguageModel.PromptLog()
+        let model = ScriptedLanguageModel(
+            script: [
+                .emitText("Let me search the vault before answering."),
+                .callTool(name: "vault_search", arguments: ["query": .string("swift concurrency")]),
+                .endTurn,
+                .emitText("Actors isolate mutable state — that's the core of Swift concurrency."),
+            ],
+            promptLog: promptLog
+        )
+        let runner = SessionAgentRunner(model: model, instructions: "system", tools: tools)
+
+        var textTokens: [String] = []
+        var finalText = ""
+        var turnEnds = 0
+        for try await event in await runner.run(prompt: "Explain Swift concurrency from my notes") {
+            switch event {
+            case .textToken(let token): textTokens.append(token)
+            case .done(let text): finalText = text
+            case .turnEnd: turnEnds += 1
+            default: break
+            }
+        }
+
+        // The narration must NOT ship as the final answer (the PUNK-dpl bug).
+        #expect(finalText == "Actors isolate mutable state — that's the core of Swift concurrency.")
+        // Both the narration and the answer reach the UI as progress text.
+        #expect(textTokens.count == 2)
+        #expect(textTokens.first?.contains("Let me search") == true)
+        // Two real rounds ran.
+        #expect(turnEnds == 2)
+        // Round 2's prompt folds the narration forward so the model doesn't re-plan.
+        #expect(promptLog.prompts.count == 2)
+        #expect(promptLog.prompts[1].contains("Let me search the vault before answering.") == true)
+        #expect(promptLog.prompts[1].contains("working notes from earlier rounds") == true)
     }
 
     @Test("A text-only script streams assistant text and finishes with done")

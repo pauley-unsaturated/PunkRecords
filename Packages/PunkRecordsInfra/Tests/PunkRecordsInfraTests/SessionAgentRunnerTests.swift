@@ -310,6 +310,33 @@ struct SessionAgentRunnerTests {
         )
         #expect(forced.localizedCaseInsensitiveContains("do not call"))
     }
+
+    @Test("roundOutcome: text is final only when the round ran no tools (PUNK-dpl)")
+    func roundOutcomeRule() {
+        #expect(SessionAgentRunner.roundOutcome(text: "The answer.", ranTools: false) == .finalAnswer)
+        #expect(SessionAgentRunner.roundOutcome(text: "Let me read X first.", ranTools: true) == .narration)
+        #expect(SessionAgentRunner.roundOutcome(text: "", ranTools: true) == .toolsOnly)
+        #expect(SessionAgentRunner.roundOutcome(text: "", ranTools: false) == .toolsOnly)
+    }
+
+    @Test("roundPrompt folds narration forward and marks it already shown")
+    func roundPromptNarration() {
+        let prompt = SessionAgentRunner.roundPrompt(
+            instructions: "CTX",
+            userRequest: "Q",
+            toolResults: [.init(name: "vault_search", output: "OUT")],
+            narrations: ["Let me search the vault first."],
+            forceAnswer: false
+        )
+        #expect(prompt.contains("Let me search the vault first."))
+        #expect(prompt.contains("working notes from earlier rounds"))
+        #expect(prompt.contains("don't repeat them"))
+
+        let without = SessionAgentRunner.roundPrompt(
+            instructions: "CTX", userRequest: "Q", toolResults: [], forceAnswer: false
+        )
+        #expect(!without.contains("working notes"))
+    }
 }
 
 // MARK: - Round-based scripted model (Ollama-faithful: one model round per `respond`)

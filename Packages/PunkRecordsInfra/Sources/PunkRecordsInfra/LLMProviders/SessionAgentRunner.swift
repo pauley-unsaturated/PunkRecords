@@ -51,12 +51,18 @@ public actor SessionAgentRunner {
     ///     see the round loop for why).
     ///   - tools: Core domain tools the session may call. Each is wrapped in an
     ///     event-emitting adapter built on ``FoundationModelsToolAdapter``.
-    ///   - options: Generation options (sampling/temperature/max tokens).
+    ///   - options: Generation options (sampling/temperature/max tokens). The
+    ///     default sets `maximumResponseTokens` explicitly because ALM's
+    ///     Anthropic backend otherwise caps responses at 1024 tokens
+    ///     (`options.maximumResponseTokens ?? 1024`), which silently truncates
+    ///     long answers and — worse — long tool-call arguments: a `create_note`
+    ///     whose body exceeds the cap loses its `content` field mid-JSON and
+    ///     the tool errors on every retry (PUNK-xu7).
     public init(
         model: any LanguageModel,
         instructions: String,
         tools: [any AgentTool],
-        options: GenerationOptions = GenerationOptions()
+        options: GenerationOptions = GenerationOptions(maximumResponseTokens: 8192)
     ) {
         self.model = model
         self.instructions = instructions
@@ -104,10 +110,15 @@ public actor SessionAgentRunner {
                     // loop, so the agentic loop lives here: a round that returns empty
                     // content means the model only called tools (their outputs are now in
                     // `toolLog`); we rebuild the prompt with those results and ask again.
-                    // The first non-empty answer — or the round cap — ends the loop.
+                    // A round's text ends the loop ONLY when that round ran no tools —
+                    // models narrate intent ("Let me read X first") while calling tools,
+                    // and treating that prose as the answer truncated multi-hop tasks
+                    // (PUNK-dpl). Narration is surfaced as progress text and folded into
+                    // the next round's prompt; the round cap still bounds the loop.
                     // Each round is bracketed by `.turnStart`/`.turnEnd` so metrics can
                     // count real rounds and attribute tool calls to them.
                     var finalText = ""
+                    var narrations: [String] = []
                     for round in 0..<Self.maxToolRounds {
                         try Task.checkCancellation()
                         continuation.yield(.turnStart(turnIndex: round))
@@ -115,8 +126,10 @@ public actor SessionAgentRunner {
                             instructions: instructions,
                             userRequest: prompt,
                             toolResults: toolLog.snapshot(),
+                            narrations: narrations,
                             forceAnswer: round == Self.maxToolRounds - 1
                         )
+                        let toolCountBeforeRound = toolLog.snapshot().count
                         // A FRESH session every round, carrying no instructions and no
                         // prior transcript. The runner is the context carrier (folded
                         // instructions + toolLog in `roundPrompt`), because the Ollama
@@ -145,15 +158,28 @@ public actor SessionAgentRunner {
                             promptTokens: TokenEstimator.estimateTokens(in: roundPrompt),
                             completionTokens: text.isEmpty ? 0 : TokenEstimator.estimateTokens(in: text)
                         )
-                        if !text.isEmpty {
+                        let ranTools = toolLog.snapshot().count > toolCountBeforeRound
+                        let outcome = Self.roundOutcome(text: text, ranTools: ranTools)
+                        if outcome != .toolsOnly {
                             continuation.yield(.textToken(text))
-                            continuation.yield(.turnEnd(turnIndex: round, usage: usage))
-                            finalText = text
-                            break
                         }
                         continuation.yield(.turnEnd(turnIndex: round, usage: usage))
+                        switch outcome {
+                        case .finalAnswer:
+                            finalText = text
+                        case .narration:
+                            narrations.append(text)
+                        case .toolsOnly:
+                            break
+                        }
+                        if outcome == .finalAnswer { break }
                     }
 
+                    // If the round cap hit with only narration, the last narration is
+                    // still better than an empty answer.
+                    if finalText.isEmpty {
+                        finalText = narrations.last ?? ""
+                    }
                     continuation.yield(.done(finalText: finalText))
                     continuation.finish()
                 } catch is CancellationError {
@@ -173,17 +199,41 @@ public actor SessionAgentRunner {
     /// loop gives up — bounds pathological or looping tool use.
     static let maxToolRounds = 8
 
+    /// How one model round resolves the agent loop's control flow.
+    enum RoundOutcome: Equatable {
+        /// Text with no tool activity this round — the answer; stop looping.
+        case finalAnswer
+        /// Text alongside tool calls — plan narration; surface it as progress
+        /// and keep looping with the tool results folded forward.
+        case narration
+        /// Tools only (or nothing) — fold results and ask again.
+        case toolsOnly
+    }
+
+    /// Pure loop-control rule (PUNK-dpl): a round's text is the final answer
+    /// only when the round ran no tools. `session.respond` executes the round's
+    /// tool calls AND returns whatever prose the model emitted around them, so
+    /// narrated multi-hop rounds ("Let me read the full paper first") must not
+    /// terminate the loop.
+    static func roundOutcome(text: String, ranTools: Bool) -> RoundOutcome {
+        if text.isEmpty { return .toolsOnly }
+        return ranTools ? .narration : .finalAnswer
+    }
+
     /// Build a self-contained prompt for one agent round. Because the backing model
     /// may be stateless (Ollama sends only the latest prompt), every round restates
     /// the instructions, the user request, and the results of any tools already
     /// called this turn — so the model always has the full picture.
     ///
+    /// - Parameter narrations: prose the model emitted alongside tool calls in
+    ///   earlier rounds this turn, restated so it doesn't re-plan from scratch.
     /// - Parameter forceAnswer: on the final allowed round, tell the model to answer
     ///   now without calling more tools, so the loop terminates with content.
     static func roundPrompt(
         instructions: String,
         userRequest: String,
         toolResults: [ToolResultLog.Entry],
+        narrations: [String] = [],
         forceAnswer: Bool
     ) -> String {
         var parts: [String] = []
@@ -194,6 +244,14 @@ public actor SessionAgentRunner {
             var block = "Results from tools you have already called this turn:\n"
             for entry in toolResults {
                 block += "- \(entry.name): \(entry.output)\n"
+            }
+            parts.append(block.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
+        if !narrations.isEmpty {
+            var block = "Your working notes from earlier rounds this turn (already shown to the user — don't repeat them):\n"
+            for narration in narrations {
+                block += "- \(narration)\n"
             }
             parts.append(block.trimmingCharacters(in: .whitespacesAndNewlines))
         }

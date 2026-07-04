@@ -26,11 +26,14 @@ public struct SessionTextCompleter: TextCompleter {
     ///     drives.
     ///   - instructions: System prompt for the session. Defaults to empty because
     ///     ``NoteCompiler`` embeds all of its directions in the prompt itself.
-    ///   - options: Generation options (sampling / max tokens).
+    ///   - options: Generation options (sampling / max tokens). Defaults set
+    ///     `maximumResponseTokens` explicitly: ALM's Anthropic backend otherwise
+    ///     caps output at 1024 tokens, truncating long compiled articles
+    ///     (PUNK-xu7).
     public init(
         model: any LanguageModel,
         instructions: String = "",
-        options: GenerationOptions = GenerationOptions()
+        options: GenerationOptions = GenerationOptions(maximumResponseTokens: 8192)
     ) {
         self.model = model
         self.instructions = instructions
