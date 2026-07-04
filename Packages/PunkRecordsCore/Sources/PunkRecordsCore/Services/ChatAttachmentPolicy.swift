@@ -11,7 +11,11 @@ public enum ChatAttachmentPolicy {
     }
 
     public static func estimatedTokens(for attachment: ChatAttachmentMetadata) -> Int {
-        switch attachment.type {
+        if let estimatedTokens = attachment.estimatedTokens {
+            return estimatedTokens
+        }
+
+        return switch attachment.type {
         case .text:
             max(1, Int(attachment.byteCount / 4))
         case .pdf:

@@ -20,18 +20,21 @@ public struct ChatAttachmentMetadata: Codable, Equatable, Identifiable, Sendable
     public let filename: String
     public let byteCount: Int64
     public let type: ChatAttachmentType
+    public let estimatedTokens: Int?
 
     public init(
         id: UUID = UUID(),
         bookmarkBase64: String,
         filename: String,
         byteCount: Int64,
-        type: ChatAttachmentType
+        type: ChatAttachmentType,
+        estimatedTokens: Int? = nil
     ) {
         self.id = id
         self.bookmarkBase64 = bookmarkBase64
         self.filename = filename
         self.byteCount = byteCount
         self.type = type
+        self.estimatedTokens = estimatedTokens
     }
 }

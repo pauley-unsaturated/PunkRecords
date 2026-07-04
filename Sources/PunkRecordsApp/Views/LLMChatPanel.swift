@@ -14,6 +14,7 @@ struct LLMChatPanel: View {
     @State private var isAttachmentImporterPresented = false
     @State private var isAttachmentDropTargeted = false
     @State private var isShowingAttachmentError = false
+    @State private var attachmentAlertTitle = "Attachment Error"
     @State private var attachmentErrorMessage = ""
     @State private var isShowingSendConfirmation = false
     @State private var deferredSendText = ""
@@ -116,7 +117,7 @@ struct LLMChatPanel: View {
             allowsMultipleSelection: true,
             onCompletion: handleAttachmentImport
         )
-        .alert("Attachment Error", isPresented: $isShowingAttachmentError) {
+        .alert(attachmentAlertTitle, isPresented: $isShowingAttachmentError) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(attachmentErrorMessage)
@@ -317,6 +318,19 @@ private extension LLMChatPanel {
     private func sendMessage(text: String, attachments: [PendingChatAttachment]) async {
         guard !text.isEmpty || !attachments.isEmpty else { return }
 
+        let agentPrompt: String
+        do {
+            agentPrompt = try TextChatAttachmentHandler.prompt(
+                userText: text,
+                attachments: attachments.map {
+                    TextChatAttachmentInput(url: $0.url, metadata: $0.metadata)
+                }
+            )
+        } catch {
+            showAttachmentError(error.localizedDescription)
+            return
+        }
+
         let attachmentMetadata = attachments.map(\.metadata)
         let attachmentTranscript = (try? ChatAttachmentPolicy.transcriptComments(for: attachmentMetadata)) ?? ""
         let userMessage = ChatMessage(
@@ -342,7 +356,7 @@ private extension LLMChatPanel {
         )
 
         isStreaming = true
-        await sendAgentMessage(text, context: context)
+        await sendAgentMessage(agentPrompt, context: context)
         persistTranscript()
         isStreaming = false
     }
@@ -379,9 +393,17 @@ private extension LLMChatPanel {
     }
 
     private func addAttachmentURLs(_ urls: [URL]) {
+        var warnings: [String] = []
         do {
             for url in urls where !pendingAttachments.contains(where: { $0.url == url }) {
-                pendingAttachments.append(try PendingChatAttachment.make(for: url))
+                let attachment = try PendingChatAttachment.make(for: url)
+                pendingAttachments.append(attachment)
+                if let warning = attachment.warning {
+                    warnings.append(warning)
+                }
+            }
+            if !warnings.isEmpty {
+                showAttachmentWarning(warnings.joined(separator: "\n"))
             }
         } catch {
             showAttachmentError(error.localizedDescription)
@@ -393,6 +415,13 @@ private extension LLMChatPanel {
     }
 
     private func showAttachmentError(_ message: String) {
+        attachmentAlertTitle = "Attachment Error"
+        attachmentErrorMessage = message
+        isShowingAttachmentError = true
+    }
+
+    private func showAttachmentWarning(_ message: String) {
+        attachmentAlertTitle = "Attachment Warning"
         attachmentErrorMessage = message
         isShowingAttachmentError = true
     }

@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct PendingChatAttachment: Equatable, Identifiable {
     let url: URL
     let metadata: ChatAttachmentMetadata
+    let warning: String?
 
     var id: UUID { metadata.id }
 
@@ -34,7 +35,14 @@ struct PendingChatAttachment: Equatable, Identifiable {
             byteCount: try byteCount(for: url, resourceFileSize: values.fileSize),
             type: attachmentType
         )
-        return PendingChatAttachment(url: url, metadata: metadata)
+        if attachmentType == .text {
+            let payload = try TextChatAttachmentHandler.payload(
+                for: TextChatAttachmentInput(url: url, metadata: metadata)
+            )
+            return PendingChatAttachment(url: url, metadata: payload.metadata, warning: payload.warning)
+        }
+
+        return PendingChatAttachment(url: url, metadata: metadata, warning: nil)
     }
 
     private static func chatAttachmentType(for contentType: UTType?, url: URL) -> ChatAttachmentType? {
