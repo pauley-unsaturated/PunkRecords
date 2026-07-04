@@ -2,6 +2,16 @@ import AnyLanguageModel
 import Foundation
 import PunkRecordsCore
 
+public struct SessionImageAttachment: Sendable, Equatable {
+    public let data: Data
+    public let mimeType: String
+
+    public init(data: Data, mimeType: String) {
+        self.data = data
+        self.mimeType = mimeType
+    }
+}
+
 /// Drives an LLM agent through AnyLanguageModel's `LanguageModelSession` and
 /// surfaces progress as PunkRecords Core ``AgentEvent``s for the chat UI and
 /// eval metrics to consume.
@@ -58,11 +68,17 @@ public actor SessionAgentRunner {
     ///
     /// The work runs on a child `Task` whose lifetime is tied to the stream:
     /// cancelling the consumer (dropping the stream) cancels the model call.
-    public func run(prompt: String) -> AsyncThrowingStream<AgentEvent, Error> {
+    public func run(
+        prompt: String,
+        images: [SessionImageAttachment] = []
+    ) -> AsyncThrowingStream<AgentEvent, Error> {
         let model = self.model
         let instructions = self.instructions
         let tools = self.tools
         let options = self.options
+        let imageSegments = images.map {
+            Transcript.ImageSegment(data: $0.data, mimeType: $0.mimeType)
+        }
 
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -111,7 +127,15 @@ public actor SessionAgentRunner {
                         // both as EMPTY text blocks the Messages API rejects with
                         // 400 "text content blocks must be non-empty" (PUNK-3az).
                         let session = LanguageModelSession(model: model, tools: wrappedTools)
-                        let response = try await session.respond(to: roundPrompt, options: options)
+                        let response = if imageSegments.isEmpty {
+                            try await session.respond(to: roundPrompt, options: options)
+                        } else {
+                            try await session.respond(
+                                to: roundPrompt,
+                                images: imageSegments,
+                                options: options
+                            )
+                        }
                         let text = response.content
                         // AnyLanguageModel surfaces no real usage, so estimate
                         // per round: the full prompt we sent and the text we got

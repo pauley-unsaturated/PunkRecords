@@ -1,5 +1,5 @@
-import SwiftUI
 import PunkRecordsCore
+import SwiftUI
 
 struct ChatAttachmentChip: View {
     let metadata: ChatAttachmentMetadata
@@ -7,9 +7,17 @@ struct ChatAttachmentChip: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: iconName)
-                .imageScale(.small)
-                .foregroundStyle(.secondary)
+            if let thumbnailImage {
+                Image(nsImage: thumbnailImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 40, height: 40)
+                    .clipShape(.rect(cornerRadius: 4))
+            } else {
+                Image(systemName: iconName)
+                    .imageScale(.small)
+                    .foregroundStyle(.secondary)
+            }
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(metadata.filename)
@@ -49,9 +57,20 @@ struct ChatAttachmentChip: View {
     }
 
     private var detailText: String {
+        if let width = metadata.imageWidth, let height = metadata.imageHeight {
+            return "\(width) x \(height) · \(byteCountText)"
+        }
         if let processingNote = metadata.processingNote {
             return "\(processingNote) · \(byteCountText)"
         }
         return byteCountText
+    }
+
+    private var thumbnailImage: NSImage? {
+        guard let thumbnailPNGBase64 = metadata.thumbnailPNGBase64,
+              let data = Data(base64Encoded: thumbnailPNGBase64) else {
+            return nil
+        }
+        return NSImage(data: data)
     }
 }

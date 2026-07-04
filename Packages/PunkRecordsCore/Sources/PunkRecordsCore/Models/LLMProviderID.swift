@@ -17,4 +17,24 @@ public enum LLMProviderID: String, Codable, Sendable, Hashable, CaseIterable {
         case .anyLanguageModel: return "Ollama"
         }
     }
+
+    public var nativeImageInput: Bool {
+        switch self {
+        case .foundationModels:
+            return false
+        case .anthropic, .openAI, .anyLanguageModel:
+            return true
+        }
+    }
+
+    public var maximumImageEdge: Int {
+        switch self {
+        case .anthropic:
+            return 1_568
+        case .openAI, .anyLanguageModel:
+            return 2_048
+        case .foundationModels:
+            return 0
+        }
+    }
 }

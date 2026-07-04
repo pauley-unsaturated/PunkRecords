@@ -13,6 +13,7 @@ struct LLMChatPanel: View {
     @State private var isAttachmentImporterPresented = false
     @State private var isAttachmentDropTargeted = false
     @State private var isShowingAttachmentError = false
+    @State private var isShowingImageProviderAlert = false
     @State private var attachmentAlertTitle = "Attachment Error"
     @State private var attachmentErrorMessage = ""
     @State private var isShowingSendConfirmation = false
@@ -133,6 +134,17 @@ struct LLMChatPanel: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This message is estimated at \(formattedTokenEstimate) tokens or includes a file larger than 20 MB.")
+        }
+        .alert("Image Provider Unsupported", isPresented: $isShowingImageProviderAlert) {
+            Button("Use Claude") {
+                chatProviderRaw = LLMProviderID.anthropic.rawValue
+            }
+            Button("Use GPT") {
+                chatProviderRaw = LLMProviderID.openAI.rawValue
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Apple does not support image attachments. Switch to Claude or GPT to send images.")
         }
     }
 
@@ -317,7 +329,14 @@ private extension LLMChatPanel {
     private func sendMessage(text: String, attachments: [PendingChatAttachment]) async {
         guard !text.isEmpty || !attachments.isEmpty else { return }
 
+        if attachments.contains(where: { $0.metadata.type == .image }),
+           !selectedProviderID.nativeImageInput {
+            isShowingImageProviderAlert = true
+            return
+        }
+
         let agentPrompt: String
+        let imageAttachments: [SessionImageAttachment]
         do {
             let textPrompt = try TextChatAttachmentHandler.prompt(
                 userText: text,
@@ -331,6 +350,15 @@ private extension LLMChatPanel {
                     PDFChatAttachmentInput(url: $0.url, metadata: $0.metadata)
                 }
             )
+            imageAttachments = try attachments
+                .filter { $0.metadata.type == .image }
+                .map { attachment in
+                    let payload = try ImageChatAttachmentHandler.payload(
+                        for: ImageChatAttachmentInput(url: attachment.url, metadata: attachment.metadata),
+                        provider: selectedProviderID
+                    )
+                    return SessionImageAttachment(data: payload.data, mimeType: payload.mimeType)
+                }
         } catch {
             showAttachmentError(error.localizedDescription)
             return
@@ -361,7 +389,7 @@ private extension LLMChatPanel {
         )
 
         isStreaming = true
-        await sendAgentMessage(agentPrompt, context: context)
+        await sendAgentMessage(agentPrompt, images: imageAttachments, context: context)
         persistTranscript()
         isStreaming = false
     }
@@ -448,7 +476,11 @@ private extension LLMChatPanel {
     /// (`SessionAgentRunner` + `LanguageModelFactory` + `buildInstructions`)
     /// and render it. The session owns the agentic tool loop; this panel only
     /// translates events into chat bubbles.
-    private func sendAgentMessage(_ text: String, context: MessageContext) async {
+    private func sendAgentMessage(
+        _ text: String,
+        images: [SessionImageAttachment] = [],
+        context: MessageContext
+    ) async {
         guard let repository = appState.repository,
               let searchIndex = appState.searchIndex else {
             messages.append(ChatMessage(role: .assistant, content: "Vault not loaded.", context: context))
@@ -497,7 +529,7 @@ private extension LLMChatPanel {
                 tools: tools
             )
 
-            let stream = await runner.run(prompt: userPrompt)
+            let stream = await runner.run(prompt: userPrompt, images: images)
 
             // Index of the current assistant text bubble being appended to. nil after a tool
             // call, which forces the next textToken to start a fresh bubble — so tool calls

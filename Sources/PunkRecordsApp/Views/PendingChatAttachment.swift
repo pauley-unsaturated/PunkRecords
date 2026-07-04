@@ -47,6 +47,12 @@ struct PendingChatAttachment: Equatable, Identifiable {
             )
             return PendingChatAttachment(url: url, metadata: payload.metadata, warning: payload.warning)
         }
+        if attachmentType == .image {
+            let imageMetadata = try ImageChatAttachmentHandler.metadata(
+                for: ImageChatAttachmentInput(url: url, metadata: metadata)
+            )
+            return PendingChatAttachment(url: url, metadata: imageMetadata, warning: nil)
+        }
 
         return PendingChatAttachment(url: url, metadata: metadata, warning: nil)
     }
