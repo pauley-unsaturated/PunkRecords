@@ -59,6 +59,28 @@ final class ChatTurnUITests: XCTestCase {
         let response = app.staticTexts.matching(predicate).firstMatch
         XCTAssertTrue(response.waitForExistence(timeout: 10),
                       "Scripted assistant text should render after the tool round")
+
+        let notePathPredicate = NSPredicate(
+            format: "label == %@ AND value CONTAINS %@",
+            "Test Note",
+            "/PunkRecords-UITest/"
+        )
+        let testNoteRow = app.staticTexts.matching(notePathPredicate).firstMatch
+        XCTAssertTrue(testNoteRow.waitForExistence(timeout: 3),
+                      "Test Note row should expose its file path")
+        let testNotePath = try XCTUnwrap(testNoteRow.value as? String)
+        let transcript = URL(fileURLWithPath: testNotePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent(".punkrecords", isDirectory: true)
+            .appendingPathComponent("chat-transcript.md")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: transcript.path),
+                      "Sending a chat turn should persist a transcript file")
+
+        let transcriptText = try String(contentsOf: transcript, encoding: .utf8)
+        XCTAssertTrue(transcriptText.contains("<!-- message: user -->"))
+        XCTAssertTrue(transcriptText.contains("What's in my vault?"))
+        XCTAssertTrue(transcriptText.contains("<!-- message: assistant -->"))
+        XCTAssertTrue(transcriptText.contains("Scripted response: vault search completed."))
     }
 
     // MARK: - Provider picker states

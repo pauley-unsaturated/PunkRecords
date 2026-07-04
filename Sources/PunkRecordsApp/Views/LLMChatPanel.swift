@@ -56,6 +56,8 @@ struct LLMChatPanel: View {
             .padding(.vertical, 8)
             .background(providerKeyboardShortcuts)
             .task {
+                loadTranscript()
+
                 // Re-probe while the panel is open so a provider that comes online
                 // after launch (e.g. you start `ollama serve`, or add an API key in
                 // Settings) un-grays on its own without reopening the panel.
@@ -278,7 +280,9 @@ struct LLMChatPanel: View {
         case .selection: "Selection"
         }
     }
+}
 
+private extension LLMChatPanel {
     private var canSendMessage: Bool {
         (!prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) && !isStreaming
     }
@@ -322,6 +326,7 @@ struct LLMChatPanel: View {
             attachmentTranscript: attachmentTranscript
         )
         messages.append(userMessage)
+        persistTranscript()
         prompt = ""
         pendingAttachments = []
 
@@ -338,7 +343,26 @@ struct LLMChatPanel: View {
 
         isStreaming = true
         await sendAgentMessage(text, context: context)
+        persistTranscript()
         isStreaming = false
+    }
+
+    private func loadTranscript() {
+        guard messages.isEmpty, let vaultRoot = appState.currentVault?.rootURL else { return }
+        do {
+            messages = try ChatTranscriptStore.load(vaultRoot: vaultRoot)
+        } catch {
+            appState.errorMessage = "Failed to load chat transcript: \(error.localizedDescription)"
+        }
+    }
+
+    private func persistTranscript() {
+        guard let vaultRoot = appState.currentVault?.rootURL else { return }
+        do {
+            try ChatTranscriptStore.save(messages: messages, vaultRoot: vaultRoot)
+        } catch {
+            appState.errorMessage = "Failed to save chat transcript: \(error.localizedDescription)"
+        }
     }
 
     private func openAttachmentImporter() {
@@ -394,6 +418,7 @@ struct LLMChatPanel: View {
         guard let repository = appState.repository,
               let searchIndex = appState.searchIndex else {
             messages.append(ChatMessage(role: .assistant, content: "Vault not loaded.", context: context))
+            persistTranscript()
             return
         }
 
@@ -481,6 +506,7 @@ struct LLMChatPanel: View {
             }
         } catch {
             messages.append(ChatMessage(role: .assistant, content: "*Error: \(error.localizedDescription)*", context: context))
+            persistTranscript()
         }
     }
 
@@ -541,30 +567,6 @@ struct LLMChatPanel: View {
     LLMChatPanel()
         .environment(PreviewData.makePreviewAppState())
         .frame(width: 350, height: 600)
-}
-
-// MARK: - Supporting Types
-
-struct ChatMessage: Identifiable {
-    let id = UUID()
-    let role: Role
-    var content: String
-    var attachments: [ChatAttachmentMetadata] = []
-    var attachmentTranscript = ""
-    let timestamp: Date = Date()
-    /// For assistant messages: snapshot of what the user did when submitting the
-    /// triggering prompt. Used by the "Report Issue" flow to reconstruct context.
-    var context: MessageContext?
-    /// Populated when role == .tool — the agent tool invocation this row represents.
-    var toolCall: ToolCallInfo?
-    /// For assistant messages: which provider produced this output. Drives the
-    /// "via Claude / GPT / Apple" attribution chip and lets future "rerun with
-    /// a different model" actions know what to switch *from*.
-    var providerID: LLMProviderID?
-
-    enum Role {
-        case user, assistant, tool
-    }
 }
 
 private struct ChatBubble: View {
