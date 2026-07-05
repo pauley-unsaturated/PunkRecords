@@ -36,6 +36,11 @@ TEST_RUNNER_PUNKRECORDS_LIVE_EVALS=1 TEST_RUNNER_PUNKRECORDS_EVAL_VAULT=/path/to
 # Lint (style backstop) — run before committing; --strict turns warnings into errors
 swiftlint
 swiftlint --strict
+
+# Architecture-boundary check (offline, no build) — fails if Core imports
+# Infra/App/FoundationModels/AnyLanguageModel, if Infra imports App, or if
+# Core's Package.swift declares a dependency on Infra/AnyLanguageModel
+scripts/check-architecture.sh
 ```
 
 Requires **Xcode 26+**, **XcodeGen** (`brew install xcodegen`), **SwiftLint** (`brew install swiftlint`), **macOS 26+** (deployment target — keep it at the OS/SDK actually installed; a higher target makes every test bundle unrunnable locally).
