@@ -12,9 +12,33 @@ struct ChatBubble: View {
     /// (`ToolCallBubble`) intentionally omit it — a fork ending on an in-flight
     /// tool call rather than a conversational turn is a confusing branch point.
     let onFork: () -> Void
+    /// The selected note this message's turn was about, resolved from its
+    /// persisted ``MessageContext`` (see `ChatSessionController.contextChip`).
+    /// `nil` for vault-wide turns — no chip renders.
+    let contextChip: ChatNoteContext.Reference?
+    /// Navigate to the chip's note. Reuses the vault's selection-driven open.
+    let onOpenContextNote: (RelativePath) -> Void
 
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
+            if let contextChip {
+                Button {
+                    onOpenContextNote(contextChip.path)
+                } label: {
+                    Label(contextChip.title, systemImage: "doc.text")
+                        .font(.caption2)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.12), in: .capsule)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Open “\(contextChip.title)” — the note this turn was about")
+                .accessibilityIdentifier("chatContextChip")
+            }
+
             VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 8) {
                 if !message.content.isEmpty {
                     Group {

@@ -495,6 +495,53 @@ final class ChatSessionController {
         isShowingAttachmentError = true
     }
 
+    // MARK: - Selected-note context
+
+    /// The note a historical message was about, resolved for the per-message
+    /// context chip. Reads the message's persisted ``MessageContext`` (scope +
+    /// current document) and resolves its note against the *current* vault, so a
+    /// reloaded thread still gets a chip as long as the note still exists. Returns
+    /// `nil` for vault-wide turns or notes that can no longer be resolved.
+    ///
+    /// The scope/decision logic is the pure ``ChatNoteContext``; the controller
+    /// only supplies the repository-style lookup (kept out of the view).
+    func contextChip(for message: ChatMessage) -> ChatNoteContext.Reference? {
+        guard let context = message.context,
+              let noteID = ChatNoteContext.referencedNoteID(
+                  scope: context.scope,
+                  currentDocumentID: context.currentDocumentID
+              ) else { return nil }
+        return ChatNoteContext.reference(for: context, document: resolveDocument(id: noteID))
+    }
+
+    /// The note the NEXT turn will be about, for the composer banner, given the
+    /// live scope. Resolves the scope's referenced note against the current vault;
+    /// `nil` (banner hidden) when the scope is vault-wide or nothing resolves.
+    func composerBanner(scope: QueryScope) -> ChatNoteContext.Reference? {
+        let currentDocumentID = appState.selectedDocument?.id
+        guard let noteID = ChatNoteContext.referencedNoteID(
+            scope: scope,
+            currentDocumentID: currentDocumentID
+        ) else { return nil }
+        return ChatNoteContext.reference(
+            scope: scope,
+            currentDocumentID: currentDocumentID,
+            document: resolveDocument(id: noteID)
+        )
+    }
+
+    /// Navigate the vault to `path`, reusing the same selection-driven navigation
+    /// QuickOpen / search use (`selectedDocumentPath`). Backs the chip / banner tap.
+    func openNote(path: RelativePath) {
+        appState.selectedDocumentPath = path
+    }
+
+    /// Resolve a document id against the in-memory vault snapshot (which mirrors
+    /// disk via the FS watcher). `nil` if it no longer exists.
+    private func resolveDocument(id: DocumentID) -> Document? {
+        appState.documents.first { $0.id == id }
+    }
+
     // MARK: - Message actions
 
     func saveAsNote(_ content: String) async {

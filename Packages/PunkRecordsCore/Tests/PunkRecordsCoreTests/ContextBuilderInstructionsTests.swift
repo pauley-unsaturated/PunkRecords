@@ -279,4 +279,48 @@ struct ContextBuilderInstructionsTests {
         #expect(instructions.contains("Knowledge base context:"))
         #expect(!instructions.contains("[[Content.]]"))
     }
+
+    // MARK: - Selected-note naming fragment
+
+    @Test("Document scope NAMES the selected note in the instructions")
+    func instructionsNameSelectedNoteForDocumentScope() async throws {
+        let doc = makeDocument(title: "Actor Reentrancy", content: "Body.", path: "swift/reentrancy.md")
+        let searchService = StubSearchService()
+        let repository = StubDocumentRepository(documents: [doc])
+
+        let builder = ContextBuilder(searchService: searchService, repository: repository)
+        let instructions = try await builder.buildInstructions(
+            prompt: "what does this say?",
+            scope: .document(doc.id),
+            currentDocumentID: doc.id,
+            maxTokens: 2000,
+            vaultName: "TestVault"
+        )
+
+        #expect(instructions.contains("titled \"Actor Reentrancy\""))
+        #expect(instructions.contains("swift/reentrancy.md"))
+        #expect(instructions.contains("refers to it unless stated otherwise"))
+    }
+
+    @Test("Vault-wide (global) scope does NOT name a selected note")
+    func instructionsOmitSelectedNoteForGlobalScope() async throws {
+        let doc = makeDocument(title: "Actor Reentrancy", content: "Body.", path: "swift/reentrancy.md")
+        let searchService = StubSearchService()
+        let repository = StubDocumentRepository(documents: [doc])
+
+        let builder = ContextBuilder(searchService: searchService, repository: repository)
+        // A document is open (currentDocumentID set), but the scope is vault-wide —
+        // so its content is still included yet the naming line is suppressed.
+        let instructions = try await builder.buildInstructions(
+            prompt: "overview?",
+            scope: .global,
+            currentDocumentID: doc.id,
+            maxTokens: 2000,
+            vaultName: "TestVault"
+        )
+
+        #expect(instructions.contains("[[Actor Reentrancy]]")) // content still present
+        #expect(!instructions.contains("refers to it unless stated otherwise"))
+        #expect(!instructions.contains("titled \"Actor Reentrancy\""))
+    }
 }

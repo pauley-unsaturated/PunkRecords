@@ -95,7 +95,9 @@ struct LLMChatPanel: View {
                                         onSaveAsNote: { Task { await controller.saveAsNote(message.content) } },
                                         onReportIssueCopy: { Task { await controller.reportIssueCopy(message) } },
                                         onReportIssueSave: { Task { await controller.reportIssueSave(message) } },
-                                        onFork: { Task { await controller.forkThread(at: message.id) } }
+                                        onFork: { Task { await controller.forkThread(at: message.id) } },
+                                        contextChip: controller.contextChip(for: message),
+                                        onOpenContextNote: { controller.openNote(path: $0) }
                                     )
                                 }
                             }
@@ -223,10 +225,39 @@ struct LLMChatPanel: View {
         .accessibilityIdentifier("chatNewChatButton")
     }
 
+    /// Banner naming the note the NEXT turn is scoped to, with the same open-note
+    /// affordance as the per-message chip. Hidden for vault-wide scopes.
+    @ViewBuilder
+    private var contextBanner: some View {
+        if let banner = controller.composerBanner(scope: scope) {
+            Button {
+                controller.openNote(path: banner.path)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "doc.text")
+                    Text("Chatting about: \(banner.title)")
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .font(.caption)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.accentColor.opacity(0.1), in: .rect(cornerRadius: 6))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Open “\(banner.title)” — the note this chat is scoped to")
+            .accessibilityIdentifier("chatContextBanner")
+        }
+    }
+
     private var chatComposer: some View {
         @Bindable var controller = controller
 
         return VStack(alignment: .leading, spacing: 8) {
+            contextBanner
+
             if !controller.pendingAttachments.isEmpty {
                 ScrollView(.horizontal) {
                     HStack(spacing: 6) {

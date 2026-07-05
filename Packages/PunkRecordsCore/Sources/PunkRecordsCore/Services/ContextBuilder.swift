@@ -107,7 +107,27 @@ public actor ContextBuilder {
         // `buildContext` already folds the selected excerpts into `systemPrompt`
         // (see `buildSystemPrompt` / `buildSystemPromptFromTemplate`), so the
         // returned prompt is the fully-assembled instructions string.
-        return systemPrompt
+        //
+        // Additively NAME the selected note when the scope is note-focused
+        // (`.document` / `.selection`): the excerpt's content is already present,
+        // but stating which note the user has open lets the model resolve deixis
+        // ("this note", "it") instead of guessing. Vault-wide scopes
+        // (`.global` / `.folder`) name nothing, so `.global` prompts are
+        // unchanged (guarded by `SessionContextThreadingEvals` +
+        // `SelectedNoteInstructionEvals`).
+        guard let noteID = ChatNoteContext.referencedNoteID(
+            scope: scope,
+            currentDocumentID: currentDocumentID
+        ), let doc = try await repository.document(withID: noteID) else {
+            return systemPrompt
+        }
+        let fragment = ChatNoteContext.instructionFragment(
+            scope: scope,
+            currentDocumentID: currentDocumentID,
+            document: doc
+        )
+        guard !fragment.isEmpty else { return systemPrompt }
+        return systemPrompt + "\n\n" + fragment
     }
 
     // MARK: - Small Context (< 4k)
