@@ -14,16 +14,18 @@ Named after Dr. Vegapunk's Punk Records from *One Piece* — the giant externali
 
 ## Requirements
 
-- **macOS 15** (Sequoia) or later
-- **Xcode 16** or later
+- **macOS 26** (Tahoe) or later
+- **Xcode 26** or later
 - **[XcodeGen](https://github.com/yonaskolb/XcodeGen)** — used to generate the Xcode project from `project.yml`
+- **[SwiftLint](https://github.com/realm/SwiftLint)** — style backstop, run before committing
 
 ## Building
 
-1. Install XcodeGen if you don't have it:
+1. Install XcodeGen and SwiftLint if you don't have them:
 
    ```sh
    brew install xcodegen
+   brew install swiftlint
    ```
 
 2. Generate the Xcode project:
@@ -32,16 +34,22 @@ Named after Dr. Vegapunk's Punk Records from *One Piece* — the giant externali
    xcodegen generate
    ```
 
+   `PunkRecords.xcodeproj` is generated, not checked in — re-run this command
+   after changing `project.yml`/`Package.swift`, or after adding/removing
+   files in an app or test target.
+
 3. Open and build in Xcode:
 
    ```sh
    open PunkRecords.xcodeproj
    ```
 
-   Or build from the command line:
+   Or build from the command line. `-skipMacroValidation` is required:
+   AnyLanguageModel ships Swift macros that otherwise abort non-interactive
+   `xcodebuild` runs.
 
    ```sh
-   xcodebuild -scheme PunkRecords -configuration Debug build
+   xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation build
    ```
 
 ## Running
@@ -58,10 +66,12 @@ PunkRecords/
 ├── Packages/
 │   ├── PunkRecordsCore/          # Domain models, protocols, and pure-logic services
 │   ├── PunkRecordsInfra/         # Concrete implementations — file I/O, SQLite, LLM providers
-│   └── PunkRecordsTestSupport/   # Mocks and test utilities
+│   ├── PunkRecordsTestSupport/   # Mocks and test utilities
+│   └── PunkRecordsEvals/         # Agent eval framework (scripted model, prompt logging)
 ├── Tests/
 │   ├── PunkRecordsIntegrationTests/
 │   ├── PunkRecordsPromptEvals/   # LLM output quality evaluations
+│   ├── PunkRecordsEvalTests/     # Agent task-completion & context-threading evals
 │   └── PunkRecordsUITests/
 ├── project.yml                   # XcodeGen project definition
 └── SPEC.md                       # Full product & technical specification
@@ -72,15 +82,41 @@ PunkRecords/
 Run all tests from Xcode (Cmd+U) or from the command line:
 
 ```sh
-xcodebuild -scheme PunkRecords -configuration Debug test
+xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test
+```
+
+Run a single test bundle with `-only-testing:`, e.g.:
+
+```sh
+xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -only-testing:PunkRecordsIntegrationTests
 ```
 
 The test suite includes:
 
 - **Unit tests** in each package (`PunkRecordsCoreTests`, `PunkRecordsInfraTests`)
 - **Integration tests** covering document lifecycle, context building, and search
-- **Prompt evals** that validate LLM output structure and grounding
+- **Prompt evals** that validate LLM output structure and grounding (need an API key; excluded from the default test plan)
+- **Agent evals** covering task completion, context threading, and token efficiency — deterministic by default, scripting the model through the real agent runner
 - **UI tests** for the editor and chat panel
+
+Live LLM evals (real API calls, real cost — in the Prompt evals and Agent
+evals suites) are opt-in via `PUNKRECORDS_LIVE_EVALS=1`. Under `xcodebuild`,
+environment variables must be prefixed `TEST_RUNNER_` to reach the test
+process — a plain env var never reaches it, and the suite silently reports
+"Executed 0 tests":
+
+```sh
+TEST_RUNNER_PUNKRECORDS_LIVE_EVALS=1 xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -only-testing:PunkRecordsEvalTests/LiveSessionAgentEvals
+```
+
+## Linting
+
+Run SwiftLint before committing as a style backstop:
+
+```sh
+swiftlint
+swiftlint --strict   # treats warnings as errors
+```
 
 ## License
 
