@@ -245,106 +245,81 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         self.theme = theme
     }
 
-    private var baseAttributes: [NSAttributedString.Key: Any] {
-        [.font: theme.bodyFont, .foregroundColor: theme.foreground]
-    }
-
     func makeNSView(context: Context) -> NSScrollView {
-        // Build an explicit TextKit 1 stack with the pill-drawing layout
-        // manager. Accessing a custom NSLayoutManager keeps us on TK1, which
-        // the editor epic deliberately chose over TK2.
-        let textStorage = NSTextStorage()
-        let layoutManager = WikilinkPillLayoutManager()
-        textStorage.addLayoutManager(layoutManager)
-        let textContainer = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
-        textContainer.widthTracksTextView = true
-        layoutManager.addTextContainer(textContainer)
+        let coordinator = context.coordinator
 
-        let textView = PillTextView(frame: .zero, textContainer: textContainer)
-        textView.isEditable = true
-        textView.isSelectable = true
-        textView.allowsUndo = true
-        textView.isRichText = true
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticDashSubstitutionEnabled = false
-        textView.isAutomaticTextReplacementEnabled = false
-        textView.usesFindBar = true
-        textView.isIncrementalSearchingEnabled = true
-        textView.backgroundColor = theme.background
-        textView.insertionPointColor = theme.insertionPoint
-        textView.font = theme.bodyFont
-        textView.textColor = theme.foreground
-        textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = false
-        textView.autoresizingMask = [.width]
-        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-
-        let scrollView = NSScrollView()
-        scrollView.hasVerticalScroller = true
-        scrollView.borderType = .noBorder
-        scrollView.documentView = textView
-
-        textView.typingAttributes = baseAttributes
-        textView.textStorage?.setAttributedString(
-            NSAttributedString(string: viewModel.document.content, attributes: baseAttributes)
+        // TextKit 1 stack + themed text view (view/storage/layout construction).
+        let (scrollView, textView) = EditorTextKitFactory.makeEditor(
+            theme: theme,
+            content: viewModel.document.content
         )
-        textView.delegate = context.coordinator
+        textView.delegate = coordinator
 
+        // Syntax highlighting + hybrid/wikilink decoration (theme-derived).
         do {
-            context.coordinator.highlighter = try TreeSitterMarkdownHighlighter(
+            coordinator.highlighter = try TreeSitterMarkdownHighlighter(
                 textView: textView,
                 theme: theme.highlighterTheme
             )
         } catch {
             assertionFailure("Failed to initialize TreeSitterMarkdownHighlighter: \(error)")
         }
-        context.coordinator.decorator = HybridUXDecorator(style: theme.decoratorStyle)
+        coordinator.decorator = HybridUXDecorator(style: theme.decoratorStyle)
         if let isResolved = isWikilinkResolved {
-            context.coordinator.wikilinkDecorator = WikilinkDecorator(
+            coordinator.wikilinkDecorator = WikilinkDecorator(
                 style: theme.wikilinkStyle,
                 isResolved: isResolved
             )
         }
-        textView.resolveWikilinkClick = { [weak coordinator = context.coordinator] index in
+        textView.resolveWikilinkClick = { [weak coordinator] index in
             guard let coordinator else { return nil }
             return coordinator.wikilinkDecorator?.clickAction(at: index, in: textView.string)
         }
         textView.onWikilinkClick = onWikilinkClick
-        textView.resolveTagClick = { [weak coordinator = context.coordinator] index in
+        textView.resolveTagClick = { [weak coordinator] index in
             guard let coordinator else { return nil }
             return coordinator.wikilinkDecorator?.tagTarget(at: index, in: textView.string)
         }
         textView.onTagClick = onTagClick
 
-        // Autocomplete popover, shared by `[[` wikilinks and `#` tags.
+        // Inline completion popover, shared by `[[` wikilinks and `#` tags.
+        coordinator.completion.wikilinkCompletions = wikilinkCompletions
+        coordinator.completion.tagCompletions = tagCompletions
+        coordinator.completion.afterAccept = { [weak coordinator] textView in
+            coordinator?.viewModel.updateContent(textView.string)
+            coordinator?.runDecorations(on: textView)
+        }
         if wikilinkCompletions != nil || tagCompletions != nil {
             let controller = WikilinkCompletionController()
-            context.coordinator.completionController = controller
-            context.coordinator.wikilinkCompletions = wikilinkCompletions
-            context.coordinator.tagCompletions = tagCompletions
-            controller.onAccept = { [weak coordinator = context.coordinator] title in
-                coordinator?.acceptCompletion(title, in: textView)
+            coordinator.completion.controller = controller
+            controller.onAccept = { [weak coordinator] title in
+                coordinator?.completion.accept(title, in: textView)
             }
             textView.completionController = controller
         }
 
+        // Slash-command menu re-decorates after inserting a snippet.
+        coordinator.slash.afterInsert = { [weak coordinator] textView in
+            coordinator?.runDecorations(on: textView)
+        }
+
         // Emacs keybinding dispatch.
-        context.coordinator.emacsEnabled = emacsEnabled
-        textView.isEmacsEnabled = { [weak coordinator = context.coordinator] in
+        coordinator.emacsEnabled = emacsEnabled
+        textView.isEmacsEnabled = { [weak coordinator] in
             coordinator?.emacsEnabled ?? false
         }
-        textView.handleEmacsChord = { [weak coordinator = context.coordinator] chord in
+        textView.handleEmacsChord = { [weak coordinator] chord in
             coordinator?.handleEmacsChord(chord, in: textView) ?? false
         }
 
-        context.coordinator.runDecorations(on: textView)
+        coordinator.runDecorations(on: textView)
 
         // Re-decorate the newly visible region when the user scrolls — decoration
         // is limited to the visible range for performance, so scrolled-in content
         // needs a fresh pass.
         let clipView = scrollView.contentView
         clipView.postsBoundsChangedNotifications = true
-        context.coordinator.observeScroll(of: clipView, textView: textView)
+        coordinator.observeScroll(of: clipView, textView: textView)
 
         // Make the NSTextView reachable from XCUITest. The wrapping
         // SwiftUI .accessibilityIdentifier modifier lands on a parent
@@ -360,7 +335,10 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         context.coordinator.emacsEnabled = emacsEnabled
         if !viewModel.isDirty && textView.string != viewModel.document.content {
             textView.textStorage?.setAttributedString(
-                NSAttributedString(string: viewModel.document.content, attributes: baseAttributes)
+                NSAttributedString(
+                    string: viewModel.document.content,
+                    attributes: EditorTextKitFactory.baseAttributes(for: theme)
+                )
             )
             context.coordinator.highlighter?.invalidateAll()
             context.coordinator.runDecorations(on: textView)
@@ -385,16 +363,10 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         var highlighter: TreeSitterMarkdownHighlighter?
         var decorator: HybridUXDecorator?
         var wikilinkDecorator: WikilinkDecorator?
-        var completionController: WikilinkCompletionController?
-        var wikilinkCompletions: ((String) -> [String])?
-        var tagCompletions: ((String) -> [String])?
-        /// The active autocomplete session, tagged by trigger kind so the
-        /// accepted title is inserted with the right syntax.
-        private enum CompletionSession {
-            case wikilink(WikilinkAutocomplete.Session)
-            case tag(TagAutocomplete.Session)
-        }
-        private var completionSession: CompletionSession?
+        /// Inline `[[`/`#` completion popover session (owns its own state).
+        let completion = EditorCompletionCoordinator()
+        /// `/` slash-command pop-up menu lifecycle.
+        let slash = SlashCommandMenuController()
         /// Whether Emacs keybindings are active; mirrored from the @AppStorage
         /// setting on every SwiftUI update.
         var emacsEnabled = false
@@ -457,7 +429,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             }
             onCaretChanged?(textView.selectedRange().location)
             runDecorations(on: textView)
-            updateCompletion(in: textView)
+            completion.update(in: textView)
         }
 
         func textView(_ textView: NSTextView, menu: NSMenu, for event: NSEvent, at charIndex: Int) -> NSMenu? {
@@ -494,166 +466,8 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             viewModel.updateContent(textView.string)
             onTextChanged?(textView.string)
             runDecorations(on: textView)
-            maybeShowSlashMenu(in: textView)
-            updateCompletion(in: textView)
-        }
-
-        // MARK: - Slash command palette
-
-        /// Pops up the slash-command menu when the user has just typed a bare
-        /// `/` at the start of a line or after whitespace.
-        private func maybeShowSlashMenu(in textView: NSTextView) {
-            let caret = textView.selectedRange().location
-            guard let session = SlashCommandLibrary.activeSession(
-                in: textView.string,
-                caretLocation: caret
-            ), session.query.isEmpty else { return }
-
-            let menu = NSMenu()
-            for command in SlashCommandLibrary.all {
-                let item = NSMenuItem(
-                    title: command.title,
-                    action: #selector(slashCommandSelected(_:)),
-                    keyEquivalent: ""
-                )
-                item.target = self
-                item.image = NSImage(systemSymbolName: command.systemImage, accessibilityDescription: command.title)
-                item.toolTip = command.subtitle
-                item.representedObject = SlashMenuContext(
-                    textView: textView,
-                    command: command,
-                    replaceLocation: session.replaceRange.lowerBound,
-                    replaceLength: session.replaceRange.count
-                )
-                menu.addItem(item)
-            }
-
-            let point = caretPoint(in: textView, at: session.replaceRange.lowerBound)
-            menu.popUp(positioning: nil, at: point, in: textView)
-        }
-
-        private func caretPoint(in textView: NSTextView, at location: Int) -> NSPoint {
-            guard let layoutManager = textView.layoutManager,
-                  let container = textView.textContainer else {
-                return .zero
-            }
-            let glyphRange = layoutManager.glyphRange(
-                forCharacterRange: NSRange(location: location, length: 0),
-                actualCharacterRange: nil
-            )
-            var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: container)
-            let origin = textView.textContainerOrigin
-            rect.origin.x += origin.x
-            rect.origin.y += origin.y
-            return NSPoint(x: rect.minX, y: rect.maxY + 2)
-        }
-
-        @objc private func slashCommandSelected(_ sender: NSMenuItem) {
-            guard let ctx = sender.representedObject as? SlashMenuContext else { return }
-            let textView = ctx.textView
-            let nsRange = NSRange(location: ctx.replaceLocation, length: ctx.replaceLength)
-            guard textView.shouldChangeText(in: nsRange, replacementString: ctx.command.snippet) else { return }
-            textView.textStorage?.replaceCharacters(in: nsRange, with: ctx.command.snippet)
-            textView.didChangeText()
-            let caret = ctx.replaceLocation + ctx.command.caretOffset
-            textView.setSelectedRange(NSRange(location: caret, length: 0))
-            runDecorations(on: textView)
-        }
-
-        // MARK: - Autocomplete (`[[` wikilinks and `#` tags)
-
-        /// Show/update/hide the completion popover based on the caret. A `[[`
-        /// wikilink session takes precedence over a `#` tag session when both
-        /// would somehow match, since `[[` is the more specific trigger.
-        private func updateCompletion(in textView: NSTextView) {
-            guard let controller = completionController, !textView.hasMarkedText() else {
-                completionController?.hide()
-                completionSession = nil
-                return
-            }
-            let caret = textView.selectedRange().location
-            let text = textView.string
-
-            if let provider = wikilinkCompletions,
-               let session = WikilinkAutocomplete.activeSession(in: text, caretLocation: caret) {
-                completionSession = .wikilink(session)
-                show(provider(session.query), anchoredAt: session.replaceRange.lowerBound, in: textView, controller: controller)
-                return
-            }
-            if let provider = tagCompletions,
-               let session = TagAutocomplete.activeSession(in: text, caretLocation: caret) {
-                completionSession = .tag(session)
-                show(provider(session.query), anchoredAt: session.replaceRange.lowerBound, in: textView, controller: controller)
-                return
-            }
-            controller.hide()
-            completionSession = nil
-        }
-
-        private func show(_ titles: [String], anchoredAt location: Int, in textView: NSTextView, controller: WikilinkCompletionController) {
-            let rect = caretScreenRect(in: textView, at: location)
-            controller.show(titles: titles, at: rect, relativeTo: textView.window)
-        }
-
-        /// Insert the accepted completion with its trigger's syntax (`[[title]]`
-        /// or `#tag `), replacing the session range, then position the caret.
-        func acceptCompletion(_ title: String, in textView: NSTextView) {
-            guard let session = completionSession else { return }
-            let replaceRange: Range<Int>
-            let insertion: String
-            let caretOffset: Int
-            switch session {
-            case .wikilink(let s):
-                replaceRange = s.replaceRange
-                insertion = WikilinkAutocomplete.insertion(for: title)
-                caretOffset = WikilinkAutocomplete.caretOffset(for: title)
-            case .tag(let s):
-                replaceRange = s.replaceRange
-                insertion = TagAutocomplete.insertion(for: title)
-                caretOffset = TagAutocomplete.caretOffset(for: title)
-            }
-            let nsRange = NSRange(location: replaceRange.lowerBound, length: replaceRange.count)
-            guard textView.shouldChangeText(in: nsRange, replacementString: insertion) else { return }
-            textView.textStorage?.replaceCharacters(in: nsRange, with: insertion)
-            textView.didChangeText()
-            textView.setSelectedRange(NSRange(location: replaceRange.lowerBound + caretOffset, length: 0))
-            completionSession = nil
-            viewModel.updateContent(textView.string)
-            runDecorations(on: textView)
-        }
-
-        /// Caret rect for `location`, converted to screen coordinates so the
-        /// completion panel can anchor beneath it.
-        private func caretScreenRect(in textView: NSTextView, at location: Int) -> NSRect {
-            guard let layoutManager = textView.layoutManager,
-                  let container = textView.textContainer else {
-                return .zero
-            }
-            let glyphRange = layoutManager.glyphRange(
-                forCharacterRange: NSRange(location: location, length: 0),
-                actualCharacterRange: nil
-            )
-            var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: container)
-            let origin = textView.textContainerOrigin
-            rect.origin.x += origin.x
-            rect.origin.y += origin.y
-            let inWindow = textView.convert(rect, to: nil)
-            return textView.window?.convertToScreen(inWindow) ?? inWindow
-        }
-    }
-
-    /// Carries everything `slashCommandSelected` needs from the menu item.
-    private final class SlashMenuContext: NSObject {
-        let textView: NSTextView
-        let command: SlashCommand
-        let replaceLocation: Int
-        let replaceLength: Int
-
-        init(textView: NSTextView, command: SlashCommand, replaceLocation: Int, replaceLength: Int) {
-            self.textView = textView
-            self.command = command
-            self.replaceLocation = replaceLocation
-            self.replaceLength = replaceLength
+            slash.maybeShowMenu(in: textView)
+            completion.update(in: textView)
         }
     }
 }

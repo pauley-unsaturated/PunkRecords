@@ -27,6 +27,14 @@ public struct SlashCommand: Sendable, Identifiable, Equatable {
         self.snippet = snippet
         self.caretOffset = caretOffset
     }
+
+    /// The text-storage edit for inserting this command in place of a `/query`
+    /// at `replaceRange`: the `snippet` plus the resulting absolute UTF-16 caret
+    /// location (`replaceRange` start + `caretOffset`). Pure so the menu
+    /// controller stays a thin AppKit shell over tested logic.
+    public func insertion(replacing replaceRange: Range<Int>) -> (text: String, caretLocation: Int) {
+        (snippet, replaceRange.lowerBound + caretOffset)
+    }
 }
 
 /// Built-in command set for the editor's slash palette, plus the pure
@@ -113,6 +121,17 @@ public enum SlashCommandLibrary {
             i -= 1
         }
         return nil
+    }
+
+    /// The replace range of a *bare* `/` trigger (empty query) at the caret, or
+    /// nil. The `/` pop-up menu appears only on a lone slash, so a
+    /// query-carrying session is deliberately ignored here (that path is handled
+    /// by inline filtering, not the menu). Gates the menu on
+    /// `session.query.isEmpty`, mirroring the old coordinator condition.
+    public static func menuTrigger(in text: String, caretLocation: Int) -> Range<Int>? {
+        guard let session = activeSession(in: text, caretLocation: caretLocation),
+              session.query.isEmpty else { return nil }
+        return session.replaceRange
     }
 
     private static func isSubsequence(_ needle: [Character], of haystack: [Character]) -> Bool {

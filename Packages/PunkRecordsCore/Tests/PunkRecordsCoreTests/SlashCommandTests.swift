@@ -99,4 +99,46 @@ struct SlashCommandTests {
     func noSlash() {
         #expect(SlashCommandLibrary.activeSession(in: "just text", caretLocation: 9) == nil)
     }
+
+    // MARK: - Menu trigger (bare-slash gate extracted from the coordinator)
+
+    @Test("Bare slash pops the menu and reports its replace range")
+    func menuTriggerBareSlash() {
+        #expect(SlashCommandLibrary.menuTrigger(in: "/", caretLocation: 1) == 0..<1)
+    }
+
+    @Test("Bare slash after a space pops the menu")
+    func menuTriggerAfterSpace() {
+        #expect(SlashCommandLibrary.menuTrigger(in: "a /", caretLocation: 3) == 2..<3)
+    }
+
+    @Test("A typed query dismisses the pop-up menu (non-empty query)")
+    func menuTriggerSuppressedByQuery() {
+        #expect(SlashCommandLibrary.menuTrigger(in: "/he", caretLocation: 3) == nil)
+    }
+
+    @Test("No active slash session means no menu")
+    func menuTriggerNoSession() {
+        #expect(SlashCommandLibrary.menuTrigger(in: "path/to", caretLocation: 7) == nil)
+        #expect(SlashCommandLibrary.menuTrigger(in: "plain", caretLocation: 5) == nil)
+    }
+
+    // MARK: - Command insertion edit
+
+    @Test("Insertion replaces `/query` with the snippet and offsets the caret")
+    func insertionEdit() {
+        let h1 = SlashCommandLibrary.all.first { $0.id == "h1" }!
+        let edit = h1.insertion(replacing: 5..<6)
+        #expect(edit.text == h1.snippet)
+        #expect(edit.caretLocation == 5 + h1.caretOffset)
+    }
+
+    @Test("Insertion caret honors each command's caretOffset from the range start")
+    func insertionCaretPerCommand() {
+        for command in SlashCommandLibrary.all {
+            let edit = command.insertion(replacing: 10..<11)
+            #expect(edit.caretLocation == 10 + command.caretOffset)
+            #expect(edit.text == command.snippet)
+        }
+    }
 }
