@@ -29,8 +29,10 @@ struct ChatTurnParameters {
 final class ChatSessionController {
     /// Dependency container. The controller reaches through it for the
     /// repository, search index, keychain, note compiler, vault, and selection —
-    /// the same surface `LLMChatPanel` used to reach for directly.
-    private let appState: AppState
+    /// the same surface `LLMChatPanel` used to reach for directly. Internal (not
+    /// `private`) so same-controller extensions in sibling files (e.g. the
+    /// summarize-to-note flow) can reach the same dependencies.
+    let appState: AppState
 
     // MARK: - Transcript & streaming
 
@@ -87,8 +89,52 @@ final class ChatSessionController {
 
     var availableProviders: [LLMProviderID] = []
 
+    // MARK: - Summarize-to-note
+
+    /// Set while the one-shot summarization completion is in flight — disables the
+    /// "Summarize to Note" action and drives its spinner. The summary is NOT
+    /// injected into the transcript; it lives here until saved/copied/discarded.
+    /// Controller-owned (mutated only by the summarize flow in the extension).
+    var isSummarizing = false
+
+    /// The finished summary body, retained from the moment it's ready until the
+    /// user saves, copies, or discards it. Non-nil ⇒ an unsaved summary exists.
+    /// Controller-owned (mutated only by the summarize flow in the extension).
+    var summaryBody: String?
+
+    /// Editable save-sheet fields: title (prefilled `Summary — <thread title>`)
+    /// and destination folder (defaults to the vault root).
+    var summaryTitle = ""
+    var summaryFolder: RelativePath = ""
+
+    /// Drives the destination save sheet.
+    var isShowingSummarySaveSheet = false
+    /// Drives the post-cancel fallback alert (Copy to Clipboard / Retry Save /
+    /// Discard) so a produced summary is never silently lost.
+    var isShowingSummaryFallback = false
+
+    /// The summarizer for the in-flight flow. Held across phases so the same
+    /// repository-backed instance handles both `summarize` and `saveSummaryNote`
+    /// (including a retry) without reconstructing an unused completer.
+    var summarizer: ConversationSummarizer?
+
     init(appState: AppState) {
         self.appState = appState
+    }
+
+    /// Existing vault folders offered by the save sheet's destination picker,
+    /// vault root first. Reuses the sidebar's folder grouping so the list matches
+    /// what the user sees in the browser.
+    var summaryFolderOptions: [RelativePath] {
+        SidebarFilter.filter(documents: appState.documents, query: "").map(\.folder)
+    }
+
+    /// Whether the active conversation has anything worth summarizing. Backs the
+    /// menu item's disabled state. False while streaming or already summarizing.
+    var canSummarize: Bool {
+        !isStreaming
+            && !isSummarizing
+            && ConversationSummarizer.hasSummarizableContent(messages)
     }
 
     // MARK: - Derived composer state
@@ -573,6 +619,8 @@ final class ChatSessionController {
             appState.errorMessage = "Failed to save issue: \(error.localizedDescription)"
         }
     }
+
+    // MARK: - Issue reporting
 
     /// Build an IssueReport for the given assistant message and prior conversation.
     private func buildReport(for message: ChatMessage) async -> IssueReport? {

@@ -56,6 +56,11 @@ struct LLMChatPanel: View {
                 Spacer()
                 providerPicker
                 scopePicker
+                if controller.isSummarizing {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityIdentifier("chatSummarizingIndicator")
+                }
                 threadMenu
                 newChatButton
                 Button("Close", systemImage: "xmark.circle.fill") {
@@ -168,6 +173,16 @@ struct LLMChatPanel: View {
         } message: { summary in
             Text("“\(summary.title)” will be permanently deleted. This can't be undone.")
         }
+        .sheet(isPresented: $controller.isShowingSummarySaveSheet) {
+            SummarySaveSheet(controller: controller)
+        }
+        .alert("Summary not saved", isPresented: $controller.isShowingSummaryFallback) {
+            Button("Retry Save") { controller.retrySaveSummary() }
+            Button("Copy to Clipboard") { controller.copySummaryToClipboard() }
+            Button("Discard", role: .destructive) { controller.discardSummary() }
+        } message: {
+            Text("Your conversation summary is ready but hasn't been saved. Retry the save, copy it to the clipboard, or discard it.")
+        }
     }
 
     /// Thread switcher: lists saved conversations (newest first, current checked)
@@ -176,6 +191,16 @@ struct LLMChatPanel: View {
     /// menu button `ChatTurnUITests` reaches for.
     private var threadMenu: some View {
         Menu {
+            Button {
+                controller.summarizeToNote(turnParameters)
+            } label: {
+                Label("Summarize to Note", systemImage: "doc.text.magnifyingglass")
+            }
+            .disabled(!controller.canSummarize)
+            .accessibilityIdentifier("chatSummarizeToNote")
+
+            Divider()
+
             ForEach(controller.threadSummaries) { summary in
                 Button {
                     Task { await controller.switchTo(threadID: summary.id) }
