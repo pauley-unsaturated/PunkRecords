@@ -64,6 +64,31 @@ public enum VaultPaths {
         return "\(dir)/\(stem)-\(stamp)\(suffixExt)"
     }
 
+    // MARK: - Crash-recovery sidecars
+
+    /// Vault-relative directory holding crash-recovery sidecars — one `.md`
+    /// file per note that has unsaved edits. Lives under `.punkrecords/`, which
+    /// is already in the default `ignoredPaths` and is hidden, so neither the
+    /// FS watcher nor the search indexer mistakes a sidecar for a real note.
+    public static var recoveryDirectory: RelativePath { ".punkrecords/recovery" }
+
+    /// Vault-relative path of the crash-recovery sidecar for a note, keyed by
+    /// the note's stable `id` (not its on-disk path) so the sidecar keeps
+    /// tracking the same note across renames and moves.
+    public static func recoverySidecarPath(forNoteID id: DocumentID) -> RelativePath {
+        "\(recoveryDirectory)/\(id.uuidString).md"
+    }
+
+    /// Recover the note id encoded in a recovery sidecar filename, or nil if
+    /// the filename is not a `{uuid}.md` sidecar (e.g. a stray in-flight `.tmp`
+    /// write left by an interrupted atomic save). Callers use this to skip
+    /// non-sidecar entries when scanning the recovery directory.
+    public static func recoveryNoteID(fromSidecarFilename filename: String) -> DocumentID? {
+        guard (filename as NSString).pathExtension.lowercased() == "md" else { return nil }
+        let stem = (filename as NSString).deletingPathExtension
+        return UUID(uuidString: stem)
+    }
+
     /// Markdown image reference text for a given vault-relative image
     /// path. Always uses forward slashes, never leading `/`, never
     /// `file://`. Pass an `alt` description for accessibility (empty

@@ -67,7 +67,14 @@ final class AppState {
     private(set) var repository: FileSystemDocumentRepository?
     private(set) var searchIndex: SQLiteSearchIndex?
     private(set) var noteCompiler: NoteCompiler?
+    private(set) var recoveryStore: FileSystemCrashRecoveryStore?
     private(set) var keychainService = KeychainService()
+
+    /// Crash-recovery sidecars discovered on open that hold unsaved work the
+    /// user should be prompted to recover or discard. Drives the recovery sheet
+    /// in `VaultWindow`. Empty when the vault opened cleanly. Classification is
+    /// the pure, unit-tested `RecoveryScan`.
+    var pendingRecoveries: [RecoveryCandidate] = []
 
     private var watchTask: Task<Void, Never>?
 
@@ -105,6 +112,9 @@ final class AppState {
 
             let index = try SQLiteSearchIndex(vaultRoot: url)
             self.searchIndex = index
+
+            let recovery = FileSystemCrashRecoveryStore(vaultRoot: url)
+            self.recoveryStore = recovery
 
             // Note compilation rides the session path (the same
             // FoundationModels/AnyLanguageModel machinery as chat) and follows
@@ -144,6 +154,11 @@ final class AppState {
 
             await repo.startWatching()
             startWatchingChanges(repo: repo)
+
+            // Surface any unsaved edits stranded by a crash/power loss since the
+            // last debounced save. Stale sidecars (note already up to date) are
+            // discarded silently; genuine ones populate the recovery sheet.
+            await scanForRecoverableNotes(store: recovery, docs: docs)
         } catch {
             errorMessage = "Failed to open vault: \(error.localizedDescription)"
         }
@@ -280,6 +295,100 @@ final class AppState {
         if let index = searchIndex {
             try? await index.removeFromIndex(documentID: doc.id)
         }
+    }
+
+    // MARK: - Crash Recovery
+
+    /// Classify the recovery sidecars on disk against the just-loaded notes,
+    /// discard the stale ones, and stage the recoverable ones for the sheet.
+    /// The comparison itself is the pure `RecoveryScan`; this method is the thin
+    /// glue that gathers note state and applies the result.
+    private func scanForRecoverableNotes(
+        store: FileSystemCrashRecoveryStore,
+        docs: [Document]
+    ) async {
+        let sidecars = (try? await store.loadSidecars()) ?? []
+        guard !sidecars.isEmpty else { return }
+
+        var notes: [DocumentID: RecoveryNoteState] = [:]
+        for doc in docs {
+            notes[doc.id] = RecoveryNoteState(content: doc.content, modified: doc.modified)
+        }
+
+        let result = RecoveryScan.scan(sidecars: sidecars, notes: notes)
+
+        // Silently drop sidecars whose note is already up to date.
+        for noteID in result.stale {
+            try? await store.removeSidecar(noteID: noteID)
+        }
+
+        pendingRecoveries = result.recoverable
+    }
+
+    /// Restore a recovery candidate's unsaved content into its note, persisting
+    /// it durably and refreshing the in-memory session (and the open editor if
+    /// it's showing that note). Drops the sidecar and clears the prompt.
+    func recoverNote(_ candidate: RecoveryCandidate) async {
+        guard let repo = repository else { return }
+
+        // Resolve the note by its stable id; fall back to reconstructing one if
+        // the note was lost entirely (sidecar with no surviving note).
+        let existing = try? await repo.document(withID: candidate.noteID)
+        let target: Document
+        if let existing {
+            target = Document(
+                id: existing.id,
+                title: existing.title,
+                content: candidate.recoveredContent,
+                path: existing.path,
+                tags: existing.tags,
+                created: existing.created,
+                modified: Date(),
+                frontmatter: existing.frontmatter,
+                linkedDocumentIDs: existing.linkedDocumentIDs
+            )
+        } else {
+            // Note gone: recover into a fresh file keyed by the recovered title.
+            let parser = MarkdownParser()
+            let parsed = parser.parse(content: candidate.recoveredContent, filename: "Recovered.md")
+            let baseName = FilenameHelpers.sanitizeFilename(parsed.title.isEmpty ? "Recovered Note" : parsed.title)
+            let path = await FilenameHelpers.uniqueNotePath(baseName: baseName) { candidatePath in
+                (try? await repo.document(atPath: candidatePath)) != nil
+            }
+            target = Document(
+                id: candidate.noteID,
+                title: parsed.title,
+                content: candidate.recoveredContent,
+                path: path
+            )
+        }
+
+        do {
+            try await repo.save(target)
+        } catch {
+            errorMessage = "Failed to recover note: \(error.localizedDescription)"
+            return
+        }
+        session.upsert(target)
+        if let index = searchIndex {
+            try? await index.index(document: target)
+        }
+        try? await recoveryStore?.removeSidecar(noteID: candidate.noteID)
+
+        // If the recovered note is the one on screen, reload the editor so it
+        // reflects the restored content instead of a stale copy.
+        if selectedDocument?.id == candidate.noteID {
+            editorReloadToken = UUID()
+        }
+
+        pendingRecoveries.removeAll { $0.noteID == candidate.noteID }
+    }
+
+    /// Discard a recovery candidate: delete its sidecar and drop the prompt.
+    /// The note on disk is left untouched.
+    func discardRecovery(_ candidate: RecoveryCandidate) async {
+        try? await recoveryStore?.removeSidecar(noteID: candidate.noteID)
+        pendingRecoveries.removeAll { $0.noteID == candidate.noteID }
     }
 
     // MARK: - Change Watching

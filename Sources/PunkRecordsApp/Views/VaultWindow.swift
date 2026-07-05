@@ -66,6 +66,14 @@ struct VaultWindow: View {
         )) {
             RefileView()
         }
+        .sheet(isPresented: Binding(
+            get: { !appState.pendingRecoveries.isEmpty },
+            // Dismissing the sheet without choosing keeps the sidecars on disk
+            // for the next launch; only Recover/Discard buttons resolve them.
+            set: { if !$0 { appState.pendingRecoveries = [] } }
+        )) {
+            RecoverySheet()
+        }
         .overlay {
             if appState.isLoading && !isUITesting {
                 VaultOpenProgressView(progress: appState.openProgress)
@@ -134,6 +142,65 @@ struct VaultWindow: View {
         } catch {
             appState.errorMessage = "Failed to export: \(error.localizedDescription)"
         }
+    }
+}
+
+// MARK: - Crash Recovery
+
+/// Minimal recovery prompt shown on launch when crash-recovery sidecars hold
+/// unsaved edits. Deliberately plain — a titled list with Recover/Discard per
+/// note. The decision logic (which notes are recoverable) is the pure, tested
+/// `RecoveryScan`; this view is a thin shell over `AppState.pendingRecoveries`.
+/// Visual polish is out of scope and validated manually.
+private struct RecoverySheet: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label("Recover unsaved changes?", systemImage: "arrow.uturn.backward.circle")
+                .font(.headline)
+
+            Text("PunkRecords found notes with unsaved edits from a previous session that ended unexpectedly.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            ForEach(appState.pendingRecoveries) { candidate in
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title(for: candidate))
+                            .font(.body)
+                        if !candidate.noteExistsOnDisk {
+                            Text("Original note is missing — recovering re-creates it.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Button("Discard", role: .destructive) {
+                        Task { await appState.discardRecovery(candidate) }
+                    }
+                    Button("Recover") {
+                        Task { await appState.recoverNote(candidate) }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+                .padding(.vertical, 4)
+                Divider()
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 420)
+    }
+
+    /// Best-effort human-readable name for a recovery candidate: the first H1 in
+    /// the recovered content, else a shortened id.
+    private func title(for candidate: RecoveryCandidate) -> String {
+        let derived = Document.deriveTitle(
+            content: candidate.recoveredContent,
+            frontmatter: [:],
+            filename: "Recovered"
+        )
+        return derived.isEmpty ? "Note \(candidate.noteID.uuidString.prefix(8))" : derived
     }
 }
 

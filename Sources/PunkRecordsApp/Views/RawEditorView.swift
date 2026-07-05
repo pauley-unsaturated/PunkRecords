@@ -167,7 +167,8 @@ struct RawEditorView: View {
                 viewModel = DocumentEditorViewModel(
                     document: doc,
                     repository: repo,
-                    searchIndex: appState.searchIndex
+                    searchIndex: appState.searchIndex,
+                    recoveryStore: appState.recoveryStore
                 )
                 // Keep AppState's live-editor mirror in sync so refile reads the
                 // freshly-loaded content (not a stale pre-reload value).
@@ -394,7 +395,6 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             case tag(TagAutocomplete.Session)
         }
         private var completionSession: CompletionSession?
-        private var debounceTask: Task<Void, Never>?
         /// Whether Emacs keybindings are active; mirrored from the @AppStorage
         /// setting on every SwiftUI update.
         var emacsEnabled = false
@@ -488,18 +488,14 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
                 emacsMark = nil
                 lastYankRange = nil
             }
+            // The view model owns autosave timing + crash-recovery sidecars:
+            // updateContent(_:) marks dirty and (re)schedules the debounced +
+            // periodic autosave. See DocumentEditorViewModel / AutosaveScheduler.
             viewModel.updateContent(textView.string)
             onTextChanged?(textView.string)
             runDecorations(on: textView)
             maybeShowSlashMenu(in: textView)
             updateCompletion(in: textView)
-
-            debounceTask?.cancel()
-            debounceTask = Task {
-                try? await Task.sleep(for: .seconds(2))
-                guard !Task.isCancelled else { return }
-                try? await viewModel.save()
-            }
         }
 
         // MARK: - Slash command palette
