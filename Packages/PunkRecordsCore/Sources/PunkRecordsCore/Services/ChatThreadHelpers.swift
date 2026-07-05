@@ -37,6 +37,46 @@ public enum ChatThreadHelpers {
         return clipped + "…"
     }
 
+    // MARK: - Forking
+
+    /// Fork a conversation at a specific message: produce a NEW ``ChatThread``
+    /// containing `source`'s messages up to AND INCLUDING the message with
+    /// `messageID`, carrying lineage back to `source` (``ChatThread/parentThreadID``
+    /// = `source.id`, ``ChatThread/forkedAtMessageID`` = `messageID`). Returns
+    /// `nil` when `messageID` is not present in `source` — nothing to fork.
+    ///
+    /// The `source` is never mutated (value semantics). Forking at the last
+    /// message yields a full copy with lineage; forking at the first yields a
+    /// single-message thread. The fork's title is derived from its sliced
+    /// messages, so a fork made at (or after) the first user message shares the
+    /// source's title — that overlap is acceptable; the lineage fields, not the
+    /// title, carry the branch relationship.
+    ///
+    /// `newThreadID` and `now` are injected (with `UUID()` / `Date()` defaults) so
+    /// the result is deterministic under test, matching the clock-as-parameter
+    /// precedent of ``ChatThread/update(messages:now:)`` — no non-deterministic
+    /// value is read inside the function body.
+    public static func fork(
+        _ source: ChatThread,
+        atMessageID messageID: UUID,
+        newThreadID: UUID = UUID(),
+        now: Date = Date()
+    ) -> ChatThread? {
+        guard let index = source.messages.firstIndex(where: { $0.id == messageID }) else {
+            return nil
+        }
+        let sliced = Array(source.messages[...index])
+        return ChatThread(
+            id: newThreadID,
+            title: deriveTitle(from: sliced),
+            createdAt: now,
+            updatedAt: now,
+            parentThreadID: source.id,
+            forkedAtMessageID: messageID,
+            messages: sliced
+        )
+    }
+
     /// Summaries sorted for the switcher: most-recently-updated first, with a
     /// stable id tiebreak so equal timestamps order deterministically.
     public static func sortedSummaries(_ summaries: [ThreadSummary]) -> [ThreadSummary] {

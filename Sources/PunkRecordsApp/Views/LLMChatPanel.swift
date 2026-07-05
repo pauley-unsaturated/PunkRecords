@@ -94,7 +94,8 @@ struct LLMChatPanel: View {
                                         message: message,
                                         onSaveAsNote: { Task { await controller.saveAsNote(message.content) } },
                                         onReportIssueCopy: { Task { await controller.reportIssueCopy(message) } },
-                                        onReportIssueSave: { Task { await controller.reportIssueSave(message) } }
+                                        onReportIssueSave: { Task { await controller.reportIssueSave(message) } },
+                                        onFork: { Task { await controller.forkThread(at: message.id) } }
                                     )
                                 }
                             }
@@ -180,6 +181,10 @@ struct LLMChatPanel: View {
                     HStack {
                         if summary.id == controller.activeThread?.id {
                             Image(systemName: "checkmark")
+                        }
+                        // Flag forked conversations with a branch glyph.
+                        if summary.hasParent {
+                            Image(systemName: "arrow.triangle.branch")
                         }
                         Text(summary.title)
                     }

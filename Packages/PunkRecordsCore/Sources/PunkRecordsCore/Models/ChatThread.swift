@@ -49,7 +49,8 @@ public struct ChatThread: Identifiable, Codable, Sendable, Equatable {
             id: id,
             title: title,
             updatedAt: updatedAt,
-            messageCount: messages.count
+            messageCount: messages.count,
+            hasParent: parentThreadID != nil
         )
     }
 
@@ -86,11 +87,35 @@ public struct ThreadSummary: Identifiable, Codable, Sendable, Equatable {
     public let title: String
     public let updatedAt: Date
     public let messageCount: Int
+    /// Whether the underlying thread was forked from another (i.e. carries a
+    /// ``ChatThread/parentThreadID``). Lets the switcher flag forked rows without
+    /// loading full threads. Defaults to `false` and decodes leniently so older
+    /// callers / any pre-existing serialization stay valid.
+    public let hasParent: Bool
 
-    public init(id: UUID, title: String, updatedAt: Date, messageCount: Int) {
+    public init(
+        id: UUID,
+        title: String,
+        updatedAt: Date,
+        messageCount: Int,
+        hasParent: Bool = false
+    ) {
         self.id = id
         self.title = title
         self.updatedAt = updatedAt
         self.messageCount = messageCount
+        self.hasParent = hasParent
+    }
+
+    /// Decodes `hasParent` leniently (defaulting to `false` when absent) so the
+    /// field is a cheap, non-breaking addition — mirroring ``ChatThread``'s
+    /// lenient `schemaVersion` decode.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.title = try c.decode(String.self, forKey: .title)
+        self.updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        self.messageCount = try c.decode(Int.self, forKey: .messageCount)
+        self.hasParent = try c.decodeIfPresent(Bool.self, forKey: .hasParent) ?? false
     }
 }

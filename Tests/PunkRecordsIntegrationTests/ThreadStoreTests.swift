@@ -119,6 +119,65 @@ struct ThreadStoreTests {
         #expect(entries.count == 1)
     }
 
+    // MARK: - Forking
+
+    @Test("Fork → save → reload preserves lineage and sliced messages; original untouched")
+    func forkSaveReloadRoundTrip() async throws {
+        let (vault, cleanup) = try factory.createTempVault()
+        defer { cleanup() }
+        let store = FileSystemThreadStore(vaultRoot: vault.rootURL)
+
+        // A four-message source conversation, saved as-is.
+        var source = ChatThread()
+        source.update(messages: [
+            ChatMessage(role: .user, content: "What is in my vault?"),
+            ChatMessage(role: .assistant, content: "Notes about DSP."),
+            ChatMessage(role: .user, content: "Tell me more about filters."),
+            ChatMessage(role: .assistant, content: "Filters shape frequency content."),
+        ])
+        try await store.save(source)
+        let sourceOnDiskBeforeFork = try #require(try await store.load(id: source.id))
+
+        // Fork at the first assistant reply, then persist the branch.
+        let branchPoint = source.messages[1]
+        let fork = try #require(ChatThreadHelpers.fork(source, atMessageID: branchPoint.id))
+        try await store.save(fork)
+
+        // The fork reloads with its lineage and sliced messages intact.
+        let reloadedFork = try #require(try await store.load(id: fork.id))
+        #expect(reloadedFork.parentThreadID == source.id)
+        #expect(reloadedFork.forkedAtMessageID == branchPoint.id)
+        #expect(reloadedFork.messages.map(\.id) == [source.messages[0].id, source.messages[1].id])
+        #expect(reloadedFork.messages.map(\.content) == ["What is in my vault?", "Notes about DSP."])
+
+        // The original thread on disk is completely unchanged by the fork.
+        let sourceOnDiskAfterFork = try #require(try await store.load(id: source.id))
+        #expect(sourceOnDiskAfterFork == sourceOnDiskBeforeFork)
+        #expect(sourceOnDiskAfterFork.parentThreadID == nil)
+        #expect(sourceOnDiskAfterFork.messages.count == 4)
+
+        // Both threads are now discoverable.
+        #expect(try await store.summaries().count == 2)
+    }
+
+    @Test("Summaries flag forked threads via hasParent, plain threads do not")
+    func summariesFlagForkedThreads() async throws {
+        let (vault, cleanup) = try factory.createTempVault()
+        defer { cleanup() }
+        let store = FileSystemThreadStore(vaultRoot: vault.rootURL)
+
+        let source = sampleThread(body: "root question")
+        try await store.save(source)
+        let fork = try #require(ChatThreadHelpers.fork(source, atMessageID: source.messages[0].id))
+        try await store.save(fork)
+
+        let summaries = try await store.summaries()
+        let sourceSummary = try #require(summaries.first { $0.id == source.id })
+        let forkSummary = try #require(summaries.first { $0.id == fork.id })
+        #expect(!sourceSummary.hasParent)
+        #expect(forkSummary.hasParent)
+    }
+
     // MARK: - Migration
 
     @Test("Migrates a legacy transcript into a thread and retires the legacy file")

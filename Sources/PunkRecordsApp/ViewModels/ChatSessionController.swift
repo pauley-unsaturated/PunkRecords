@@ -358,6 +358,30 @@ final class ChatSessionController {
         }
     }
 
+    /// Fork the active conversation at `messageID`: create a new thread holding
+    /// the transcript up to AND INCLUDING that message, with lineage back to the
+    /// active thread, then persist it and switch to it. The original thread is
+    /// left untouched (already on disk from its own turns). A no-op when there is
+    /// no active thread/store or the id isn't in the current transcript.
+    ///
+    /// Forks over the live `messages` (not `activeThread.messages`) so an unsaved
+    /// streaming tail is captured, and so the branch matches exactly what the user
+    /// sees on screen.
+    func forkThread(at messageID: UUID) async {
+        guard let store = threadStore, let source = activeThread else { return }
+        var forkSource = source
+        forkSource.messages = messages
+        guard let fork = ChatThreadHelpers.fork(forkSource, atMessageID: messageID) else { return }
+        do {
+            try await store.save(fork)
+        } catch {
+            appState.errorMessage = "Failed to fork chat: \(error.localizedDescription)"
+            return
+        }
+        activate(fork)
+        await refreshThreadSummaries()
+    }
+
     /// Persist the active thread's current messages. Skips empty conversations so
     /// a brand-new thread only lands on disk once it has content. Re-derives the
     /// title and bumps `updatedAt`, then refreshes the switcher.

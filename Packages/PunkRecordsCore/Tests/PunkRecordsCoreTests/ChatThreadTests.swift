@@ -73,6 +73,91 @@ struct ChatThreadTests {
         #expect(!ChatThreadHelpers.shouldMigrateLegacyTranscript(hasLegacyContent: false, hasExistingThreads: true))
     }
 
+    // MARK: - Forking
+
+    /// A four-message source conversation with stable message ids for slicing.
+    private func forkSource() -> ChatThread {
+        ChatThread(
+            id: UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000001")!,
+            title: "What is in my vault?",
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 200),
+            messages: [
+                ChatMessage(role: .user, content: "What is in my vault?"),
+                ChatMessage(role: .assistant, content: "Notes about DSP."),
+                ChatMessage(role: .user, content: "Tell me more about filters."),
+                ChatMessage(role: .assistant, content: "Filters shape frequency content."),
+            ]
+        )
+    }
+
+    @Test("Fork slices messages up to and including the target, with lineage")
+    func forkSlicesAndCarriesLineage() {
+        let source = forkSource()
+        let target = source.messages[1] // first assistant reply
+        let now = Date(timeIntervalSince1970: 9_999)
+        let newID = UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000002")!
+
+        let forked = try! #require(ChatThreadHelpers.fork(source, atMessageID: target.id, newThreadID: newID, now: now))
+
+        // Slice is [0...1] — up to AND including the target.
+        #expect(forked.messages.map(\.id) == [source.messages[0].id, source.messages[1].id])
+        // Fresh identity + injected clock.
+        #expect(forked.id == newID)
+        #expect(forked.id != source.id)
+        #expect(forked.createdAt == now)
+        #expect(forked.updatedAt == now)
+        // Lineage points back at the source and the branch point.
+        #expect(forked.parentThreadID == source.id)
+        #expect(forked.forkedAtMessageID == target.id)
+        #expect(forked.schemaVersion == ChatThread.currentSchemaVersion)
+    }
+
+    @Test("Forking at the last message is a full copy with lineage")
+    func forkAtLastMessageIsFullCopy() {
+        let source = forkSource()
+        let last = source.messages[source.messages.count - 1]
+        let forked = try! #require(ChatThreadHelpers.fork(source, atMessageID: last.id))
+        #expect(forked.messages.map(\.id) == source.messages.map(\.id))
+        #expect(forked.parentThreadID == source.id)
+        #expect(forked.forkedAtMessageID == last.id)
+    }
+
+    @Test("Forking at the first message yields a single-message thread")
+    func forkAtFirstMessage() {
+        let source = forkSource()
+        let first = source.messages[0]
+        let forked = try! #require(ChatThreadHelpers.fork(source, atMessageID: first.id))
+        #expect(forked.messages.map(\.id) == [first.id])
+        #expect(forked.forkedAtMessageID == first.id)
+    }
+
+    @Test("Forking at a message id not in the thread returns nil")
+    func forkNotFoundReturnsNil() {
+        let source = forkSource()
+        #expect(ChatThreadHelpers.fork(source, atMessageID: UUID()) == nil)
+    }
+
+    @Test("Fork title is derived from the sliced messages")
+    func forkTitleFromSlice() {
+        let source = forkSource()
+        let forked = try! #require(ChatThreadHelpers.fork(source, atMessageID: source.messages[1].id))
+        // First user message is unchanged by the slice, so the title matches the
+        // source's — an acceptable overlap; lineage carries the distinction.
+        #expect(forked.title == ChatThreadHelpers.deriveTitle(from: Array(source.messages[0...1])))
+        #expect(forked.title == "What is in my vault?")
+    }
+
+    @Test("Forking leaves the source thread untouched")
+    func forkLeavesSourceUnchanged() {
+        let source = forkSource()
+        let before = source
+        _ = ChatThreadHelpers.fork(source, atMessageID: source.messages[1].id)
+        #expect(source == before)
+        #expect(source.parentThreadID == nil)
+        #expect(source.messages.count == 4)
+    }
+
     // MARK: - Codable round-trips
 
     /// Round-trip a thread whose messages carry a populated `MessageContext` and

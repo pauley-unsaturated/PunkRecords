@@ -7,6 +7,11 @@ struct ChatBubble: View {
     let onSaveAsNote: () -> Void
     let onReportIssueCopy: () -> Void
     let onReportIssueSave: () -> Void
+    /// Branch a new conversation from this message (transcript up to and
+    /// including it). Offered on user and assistant bubbles; tool-call chips
+    /// (`ToolCallBubble`) intentionally omit it — a fork ending on an in-flight
+    /// tool call rather than a conversational turn is a confusing branch point.
+    let onFork: () -> Void
 
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
@@ -88,6 +93,10 @@ struct ChatBubble: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
+        .contextMenu {
+            Button("Fork from Here", systemImage: "arrow.triangle.branch", action: onFork)
+                .accessibilityIdentifier("chatForkFromHere")
+        }
     }
 
     private func iconName(for type: ChatAttachmentType) -> String {
