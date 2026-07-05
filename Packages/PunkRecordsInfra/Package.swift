@@ -12,6 +12,10 @@ let package = Package(
         .package(path: "../PunkRecordsTestSupport"),
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
         .package(url: "https://github.com/kishikawakatsumi/KeychainAccess.git", from: "4.2.2"),
+        // Pure-Swift HTML parser (a jsoup port, MIT). Backs the offline Tier 1
+        // web-content extractor (Readability-style scoring). Network + parsing
+        // is Infra's job; Core sees only the protocol + output model.
+        .package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.7.0"),
         // API-compatible drop-in for Apple's FoundationModels with pluggable
         // backends (Ollama, MLX, llama.cpp, remote providers). Backs the local
         // "Ollama" provider; works back to macOS 14, so not gated on macOS 26+.
@@ -48,6 +52,7 @@ let package = Package(
                 "PunkRecordsCore",
                 .product(name: "GRDB", package: "GRDB.swift"),
                 "KeychainAccess",
+                "SwiftSoup",
                 .product(name: "AnyLanguageModel", package: "AnyLanguageModel"),
                 .product(name: "Neon", package: "Neon"),
                 .product(name: "SwiftTreeSitter", package: "SwiftTreeSitter"),
@@ -61,6 +66,13 @@ let package = Package(
                 .product(name: "TreeSitterTypeScript", package: "tree-sitter-typescript"),
                 .product(name: "TreeSitterBash", package: "tree-sitter-bash"),
                 .product(name: "TreeSitterJSON", package: "tree-sitter-json"),
+            ],
+            resources: [
+                // Mozilla's Readability.js (Apache-2.0), vendored for the Tier 2
+                // headless-browser extractor. Loaded from Bundle.module at runtime.
+                .copy("WebFetch/Resources/Readability.js"),
+                .copy("WebFetch/Resources/Readability-readerable.js"),
+                .copy("WebFetch/Resources/Readability-LICENSE.md"),
             ]
         ),
         .testTarget(

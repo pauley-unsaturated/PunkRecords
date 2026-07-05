@@ -89,6 +89,30 @@ public enum VaultPaths {
         return UUID(uuidString: stem)
     }
 
+    // MARK: - Web content cache
+
+    /// Vault-relative directory where fetched web pages are cached as raw HTML
+    /// for offline anchor rendering. Lives under `Web/_cache/` — a visible
+    /// `Web/` tree the user can browse, with the derived cache tucked under a
+    /// leading-underscore subdir so it reads as "generated" and sorts away from
+    /// hand-authored notes. Callers should add `Web/_cache` to `ignoredPaths`
+    /// so the search indexer skips it.
+    public static var webCacheDirectory: RelativePath { "Web/_cache" }
+
+    /// Vault-relative path of the cached HTML for a fetched web page, keyed by a
+    /// slug (see ``WebSlug/slug(forURL:)``) so the same URL maps to a stable
+    /// file across fetches. Always `.html` under ``webCacheDirectory``.
+    public static func webCachePath(forSlug slug: String) -> RelativePath {
+        let safe = slug.isEmpty ? "section" : slug
+        return "\(webCacheDirectory)/\(safe).html"
+    }
+
+    /// Convenience: the cache path for a fetched URL, deriving the slug from the
+    /// URL. Equivalent to `webCachePath(forSlug: WebSlug.slug(forURL:))`.
+    public static func webCachePath(forURL url: URL) -> RelativePath {
+        webCachePath(forSlug: WebSlug.slug(forURL: url))
+    }
+
     /// Markdown image reference text for a given vault-relative image
     /// path. Always uses forward slashes, never leading `/`, never
     /// `file://`. Pass an `alt` description for accessibility (empty

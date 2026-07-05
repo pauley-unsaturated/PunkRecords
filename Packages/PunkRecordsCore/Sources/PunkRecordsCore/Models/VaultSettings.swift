@@ -7,7 +7,7 @@ public struct VaultSettings: Codable, Sendable {
 
     public init(
         defaultLLMProvider: LLMProviderID = .anthropic,
-        ignoredPaths: [String] = [".punkrecords/**", ".obsidian/**", ".git/**"],
+        ignoredPaths: [String] = [".punkrecords/**", ".obsidian/**", ".git/**", "Web/_cache/**"],
         autoIndexOnSave: Bool = true
     ) {
         self.defaultLLMProvider = defaultLLMProvider

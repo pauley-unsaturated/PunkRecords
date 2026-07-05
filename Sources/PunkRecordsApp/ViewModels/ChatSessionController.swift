@@ -225,11 +225,21 @@ final class ChatSessionController {
             )
 
             // The session owns the tool loop; hand it the same Core AgentTools.
+            // The web fetcher is a standalone Infra service the tool wraps, so a
+            // future web-search feature (PUNK-e5u) can reuse it. Tier 2 uses a
+            // WKWebView (built here on the main actor); Tier 3 (Jina) is gated on
+            // per-domain consent surfaced via a thin App-side dialog.
+            let consentStore = WebFetchConsentStore()
+            let webFetcher = ThreeTierWebContentFetcher.makeDefault(
+                vaultRoot: appState.currentVault?.rootURL,
+                jinaConsent: WebFetchConsentPrompt.makeConsentClosure(store: consentStore)
+            )
             let tools: [any AgentTool] = [
                 VaultSearchTool(searchService: searchIndex),
                 ReadDocumentTool(repository: repository),
                 CreateNoteTool(repository: repository),
                 ListDocumentsTool(repository: repository),
+                WebFetchTool(fetcher: webFetcher),
             ]
 
             // Fold any selected text into the user prompt, matching AgentLoop.
