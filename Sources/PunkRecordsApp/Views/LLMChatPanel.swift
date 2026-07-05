@@ -96,6 +96,11 @@ struct LLMChatPanel: View {
                             }
                             .id(message.id)
                         }
+
+                        if ChatWaitingIndicator.shouldShow(isStreaming: controller.isStreaming, messages: controller.messages) {
+                            ChatWaitingIndicatorView()
+                                .id("chatWaitingIndicator")
+                        }
                     }
                     .padding()
                 }
