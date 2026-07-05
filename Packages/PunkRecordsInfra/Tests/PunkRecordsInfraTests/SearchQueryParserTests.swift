@@ -139,6 +139,58 @@ struct SearchQueryParserTests {
         #expect(parsed.excludedTerms.contains("legacy"))
     }
 
+    // MARK: - tag:/title: filter parsing (PUNK-ilq)
+
+    @Test("tag: preserves hyphenated tags instead of truncating to first word")
+    func hyphenatedTagFilter() {
+        let parsed = SearchQueryParser.parse("tag:swift-concurrency notes")
+        #expect(parsed.tagFilter == "swift-concurrency")
+        #expect(parsed.terms == ["notes"])
+    }
+
+    @Test("title: preserves hyphenated titles instead of truncating to first word")
+    func hyphenatedTitleFilter() {
+        let parsed = SearchQueryParser.parse("title:my-note content")
+        #expect(parsed.titleFilter == "my-note")
+        #expect(parsed.terms == ["content"])
+    }
+
+    @Test("tag: does not leak into the FTS query")
+    func tagFilterExcludedFromFTS() {
+        let parsed = SearchQueryParser.parse("actors tag:swift")
+        #expect(parsed.tagFilter == "swift")
+        #expect(!parsed.ftsQuery.contains("tag"))
+        #expect(!parsed.ftsQuery.contains("swift"))
+        #expect(parsed.ftsQuery.contains("actors"))
+    }
+
+    @Test("title: does not leak into the FTS query")
+    func titleFilterExcludedFromFTS() {
+        let parsed = SearchQueryParser.parse("guide title:Setup")
+        #expect(parsed.titleFilter == "Setup")
+        #expect(!parsed.ftsQuery.contains("Setup"))
+        #expect(!parsed.ftsQuery.contains("title"))
+        #expect(parsed.ftsQuery.contains("guide"))
+    }
+
+    @Test("tag:/title: filter values retain trailing punctuation verbatim")
+    func filterValuesKeepPunctuation() {
+        // The parser is deliberately punctuation-agnostic for filter values —
+        // normalization/matching happens in the index. It must not crash or
+        // split the value into FTS terms.
+        let parsed = SearchQueryParser.parse("tag:c++ title:v1.2")
+        #expect(parsed.tagFilter == "c++")
+        #expect(parsed.titleFilter == "v1.2")
+        #expect(parsed.terms.isEmpty)
+    }
+
+    @Test("Bare tag: / title: prefixes with no value leave the filter unset")
+    func emptyFilterValues() {
+        let parsed = SearchQueryParser.parse("tag: title:")
+        #expect(parsed.tagFilter == nil)
+        #expect(parsed.titleFilter == nil)
+    }
+
     @Test("ftsQuery output contains only FTS-safe characters")
     func ftsQueryIsAlwaysSafe() {
         // Throw a mix of pathological input at the parser; the emitted query

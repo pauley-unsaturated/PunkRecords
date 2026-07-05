@@ -122,6 +122,190 @@ struct SQLiteSearchIndexTests {
         #expect(!results.isEmpty)
     }
 
+    // MARK: - tag: / title: metadata filters (PUNK-ilq)
+
+    /// Indexes a small fixed corpus used by the filter tests below.
+    private func makeTaggedCorpus() async throws -> SQLiteSearchIndex {
+        let index = try SQLiteSearchIndex(inMemory: true)
+        try await index.index(document: Document(
+            title: "Swift Concurrency Guide",
+            content: "# Swift Concurrency\n\nActors, async/await and structured concurrency.",
+            path: "swift-concurrency.md",
+            tags: ["swift", "concurrency"]
+        ))
+        try await index.index(document: Document(
+            title: "SwiftUI Layout",
+            content: "# SwiftUI Layout\n\nStacks and geometry in SwiftUI.",
+            path: "swiftui-layout.md",
+            tags: ["swiftui", "ui"]
+        ))
+        try await index.index(document: Document(
+            title: "Rust Ownership",
+            content: "# Rust Ownership\n\nBorrow checker and lifetimes.",
+            path: "rust-ownership.md",
+            tags: ["rust", "concurrency"]
+        ))
+        return index
+    }
+
+    @Test("tag: alone returns exactly the tagged documents")
+    func tagFilterReturnsTaggedDocs() async throws {
+        let index = try await makeTaggedCorpus()
+        let results = try await index.search(query: "tag:concurrency")
+        let paths = Set(results.map(\.path))
+        #expect(paths == ["swift-concurrency.md", "rust-ownership.md"])
+    }
+
+    @Test("tag: match is exact — does not substring-match related tags")
+    func tagFilterIsExactNotSubstring() async throws {
+        let index = try await makeTaggedCorpus()
+        // "swift" must NOT match the "swiftui" tag — the classic LIKE bug.
+        let results = try await index.search(query: "tag:swift")
+        let paths = Set(results.map(\.path))
+        #expect(paths == ["swift-concurrency.md"])
+    }
+
+    @Test("tag: filtering is case-insensitive")
+    func tagFilterIsCaseInsensitive() async throws {
+        let index = try await makeTaggedCorpus()
+        let results = try await index.search(query: "tag:CONCURRENCY")
+        #expect(Set(results.map(\.path)) == ["swift-concurrency.md", "rust-ownership.md"])
+    }
+
+    @Test("tag: with no matching tag returns nothing")
+    func tagFilterNoMatch() async throws {
+        let index = try await makeTaggedCorpus()
+        let results = try await index.search(query: "tag:nonexistent")
+        #expect(results.isEmpty)
+    }
+
+    @Test("Full-text query combined with tag: narrows to the intersection")
+    func queryPlusTagFilter() async throws {
+        let index = try await makeTaggedCorpus()
+        // "concurrency" as free text matches all three via the concurrency tag /
+        // body; the tag:swift filter narrows to the single swift-tagged doc.
+        let results = try await index.search(query: "concurrency tag:swift")
+        #expect(Set(results.map(\.path)) == ["swift-concurrency.md"])
+    }
+
+    @Test("Hyphenated tags round-trip through storage and exact match")
+    func hyphenatedTagRoundTrips() async throws {
+        let index = try SQLiteSearchIndex(inMemory: true)
+        try await index.index(document: Document(
+            title: "DSP Notes",
+            content: "# DSP\n\nFilters.",
+            path: "dsp.md",
+            tags: ["swift-concurrency", "audio"]
+        ))
+        let hit = try await index.search(query: "tag:swift-concurrency")
+        #expect(hit.map(\.path) == ["dsp.md"])
+        // The prefix "swift" must not match the full "swift-concurrency" tag.
+        let miss = try await index.search(query: "tag:swift")
+        #expect(miss.isEmpty)
+    }
+
+    @Test("Punctuation-laden tags are stored and matched without false positives")
+    func punctuationTagExactMatch() async throws {
+        let index = try SQLiteSearchIndex(inMemory: true)
+        try await index.index(document: Document(
+            title: "C Plus Plus",
+            content: "# C++\n\nTemplates.",
+            path: "cpp.md",
+            tags: ["c++"]
+        ))
+        try await index.index(document: Document(
+            title: "C Language",
+            content: "# C\n\nPointers.",
+            path: "c.md",
+            tags: ["c"]
+        ))
+        let cpp = try await index.search(query: "tag:c++")
+        #expect(cpp.map(\.path) == ["cpp.md"])
+        let c = try await index.search(query: "tag:c")
+        #expect(c.map(\.path) == ["c.md"])
+    }
+
+    @Test("title: alone matches by case-insensitive substring")
+    func titleFilterSubstringMatch() async throws {
+        let index = try await makeTaggedCorpus()
+        // "swift" appears in two titles ("Swift Concurrency Guide", "SwiftUI Layout").
+        let results = try await index.search(query: "title:swift")
+        #expect(Set(results.map(\.path)) == ["swift-concurrency.md", "swiftui-layout.md"])
+    }
+
+    @Test("title: narrows a full-text query to matching titles")
+    func queryPlusTitleFilter() async throws {
+        let index = try await makeTaggedCorpus()
+        // Body/tag term "concurrency" matches swift + rust docs; title:Rust keeps only Rust.
+        let results = try await index.search(query: "concurrency title:Rust")
+        #expect(results.map(\.path) == ["rust-ownership.md"])
+    }
+
+    @Test("title: with LIKE metacharacters matches literally, not as wildcards")
+    func titleFilterEscapesLikeWildcards() async throws {
+        let index = try SQLiteSearchIndex(inMemory: true)
+        try await index.index(document: Document(
+            title: "100% Coverage",
+            content: "# Coverage\n\nTests.",
+            path: "coverage.md"
+        ))
+        try await index.index(document: Document(
+            title: "Plain Title",
+            content: "# Plain\n\nNo percent here.",
+            path: "plain.md"
+        ))
+        // "%" must be treated as a literal, so only the doc whose title actually
+        // contains "%" matches — not every title (which a bare LIKE '%%%' would).
+        let results = try await index.search(query: "title:100%")
+        #expect(results.map(\.path) == ["coverage.md"])
+    }
+
+    @Test("Combined tag: and title: filters intersect")
+    func combinedTagAndTitleFilter() async throws {
+        let index = try await makeTaggedCorpus()
+        // tag:concurrency → {swift-concurrency, rust}; title:swift → {swift-concurrency, swiftui}.
+        // Intersection is the single swift-concurrency doc.
+        let results = try await index.search(query: "tag:concurrency title:swift")
+        #expect(results.map(\.path) == ["swift-concurrency.md"])
+    }
+
+    @Test("Re-indexing a document replaces its tags")
+    func reindexReplacesTags() async throws {
+        let index = try SQLiteSearchIndex(inMemory: true)
+        let id = DocumentID()
+        try await index.index(document: Document(
+            id: id, title: "Note", content: "# Note", path: "note.md", tags: ["old"]
+        ))
+        try await index.index(document: Document(
+            id: id, title: "Note", content: "# Note", path: "note.md", tags: ["new"]
+        ))
+        #expect(try await index.search(query: "tag:old").isEmpty)
+        #expect(try await index.search(query: "tag:new").map(\.path) == ["note.md"])
+    }
+
+    @Test("Removing a document drops it from tag filtering")
+    func removeDropsTagRows() async throws {
+        let index = try SQLiteSearchIndex(inMemory: true)
+        let doc = Document(title: "Tagged", content: "# Tagged", path: "tagged.md", tags: ["keep"])
+        try await index.index(document: doc)
+        #expect(try await index.search(query: "tag:keep").map(\.path) == ["tagged.md"])
+        try await index.removeFromIndex(documentID: doc.id)
+        #expect(try await index.search(query: "tag:keep").isEmpty)
+    }
+
+    @Test("Rebuild refreshes the tag table")
+    func rebuildRefreshesTags() async throws {
+        let index = try SQLiteSearchIndex(inMemory: true)
+        try await index.index(document: Document(
+            title: "Stale", content: "# Stale", path: "stale.md", tags: ["stale"]
+        ))
+        try await index.rebuildIndex(documents: [
+            Document(title: "Fresh", content: "# Fresh", path: "fresh.md", tags: ["fresh"])
+        ])
+        #expect(try await index.search(query: "tag:stale").isEmpty)
+        #expect(try await index.search(query: "tag:fresh").map(\.path) == ["fresh.md"])
+    }
+
     // MARK: - Rebuild progress reporting (PUNK-rwc)
 
     @Test("rebuildIndex(onProgress:) reports 0...total, ending at total")

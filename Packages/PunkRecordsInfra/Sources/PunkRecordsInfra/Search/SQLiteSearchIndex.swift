@@ -29,8 +29,35 @@ public actor SQLiteSearchIndex: SearchService {
         try migrateDatabaseIfNeeded()
     }
 
+    /// Schema version for the derived on-disk index. Bump this whenever the
+    /// table layout changes so a stale `.punkrecords/index.sqlite` is dropped
+    /// and rebuilt cleanly on open rather than half-migrating. The index holds
+    /// no source-of-truth data — it is rebuilt from the `.md` files on every
+    /// vault open (see `AppState.openVault` → `rebuildIndex`) — so dropping it
+    /// is always safe.
+    ///
+    /// History:
+    ///   1 — original layout (tags stored base64-encoded JSON in
+    ///       `document_meta.tag_json`, queried incoherently with `LIKE`)
+    ///   2 — normalized `document_tags(doc_id, tag)` table for exact `tag:`
+    ///       filtering; `tag_json` column removed
+    private static let schemaVersion = 2
+
     private nonisolated func migrateDatabaseIfNeeded() throws {
         try dbPool.write { db in
+            // `PRAGMA user_version` is SQLite's built-in schema-version slot.
+            // The value is a compile-time constant (never user input), so
+            // interpolating it is safe.
+            let existingVersion = try Int.fetchOne(db, sql: "PRAGMA user_version") ?? 0
+            if existingVersion != Self.schemaVersion {
+                // Prior-schema tables get dropped so we recreate cleanly. Safe
+                // because the index is derived data, rebuilt after open.
+                try db.execute(sql: "DROP TABLE IF EXISTS document_meta")
+                try db.execute(sql: "DROP TABLE IF EXISTS document_fts")
+                try db.execute(sql: "DROP TABLE IF EXISTS document_links")
+                try db.execute(sql: "DROP TABLE IF EXISTS document_tags")
+            }
+
             // Document metadata
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS document_meta (
@@ -38,10 +65,23 @@ public actor SQLiteSearchIndex: SearchService {
                     path        TEXT NOT NULL,
                     title       TEXT,
                     created_at  INTEGER NOT NULL,
-                    modified_at INTEGER NOT NULL,
-                    tag_json    TEXT
+                    modified_at INTEGER NOT NULL
                 )
             """)
+
+            // Normalized tag table: one row per (document, tag). Exact-token
+            // matching via a bound `tag = ?` powers the `tag:` filter without
+            // the substring false-positives a LIKE against joined tag text
+            // would produce (e.g. `tag:swift` matching "swiftui"), and stays
+            // injection-safe for punctuation-laden tags.
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS document_tags (
+                    doc_id  TEXT NOT NULL,
+                    tag     TEXT NOT NULL
+                )
+            """)
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_tags_tag ON document_tags(tag)")
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_tags_doc ON document_tags(doc_id)")
 
             // FTS5 full-text search
             if try !db.tableExists("document_fts") {
@@ -72,6 +112,8 @@ public actor SQLiteSearchIndex: SearchService {
             try db.execute(sql: """
                 CREATE INDEX IF NOT EXISTS idx_links_target ON document_links(target_id)
             """)
+
+            try db.execute(sql: "PRAGMA user_version = \(Self.schemaVersion)")
         }
     }
 
@@ -83,11 +125,31 @@ public actor SQLiteSearchIndex: SearchService {
         let parsed = SearchQueryParser.parse(query)
 
         return try await dbPool.read { db -> [SearchResult] in
-            var results: [SearchResult] = []
+            // Resolve each metadata filter to a set of candidate document IDs.
+            // `nil` means the filter is absent; an empty set means present but
+            // matching nothing. All lookups use bound parameters.
+            let tagIDs = try parsed.tagFilter.map { try Self.tagMatchIDs(db, tag: $0) }
+            let titleIDs = try parsed.titleFilter.map { try Self.titleMatchIDs(db, title: $0) }
+
+            func passesFilters(_ id: String) -> Bool {
+                if let tagIDs, !tagIDs.contains(id) { return false }
+                if let titleIDs, !titleIDs.contains(id) { return false }
+                return true
+            }
 
             let ftsQuery = parsed.ftsQuery
-            guard !ftsQuery.isEmpty else { return [] }
+            if ftsQuery.isEmpty {
+                // Metadata-only query (e.g. `tag:swift` or `title:Guide` with no
+                // free-text terms). With no filter at all there is nothing to
+                // rank, so return empty. Otherwise intersect the present filters.
+                guard tagIDs != nil || titleIDs != nil else { return [] }
+                var candidateIDs = tagIDs ?? titleIDs ?? []
+                if let tagIDs, let titleIDs { candidateIDs = tagIDs.intersection(titleIDs) }
+                guard !candidateIDs.isEmpty else { return [] }
+                return try Self.metadataResults(db, ids: candidateIDs)
+            }
 
+            var results: [SearchResult] = []
             let rows = try Row.fetchAll(db, sql: """
                 SELECT
                     document_fts.id,
@@ -114,17 +176,56 @@ public actor SQLiteSearchIndex: SearchService {
                 ))
             }
 
-            // Apply tag filter if present
-            if let tagFilter = parsed.tagFilter {
-                let taggedIDs = try Row.fetchAll(db, sql: """
-                    SELECT id FROM document_meta WHERE tag_json LIKE ?
-                """, arguments: ["%\(tagFilter)%"])
-                let taggedIDSet = Set(taggedIDs.compactMap { $0["id"] as? String })
-                results = results.filter { taggedIDSet.contains($0.documentID.uuidString) }
+            // Narrow full-text hits by any metadata filters.
+            if tagIDs != nil || titleIDs != nil {
+                results = results.filter { passesFilters($0.documentID.uuidString) }
             }
 
             return results
         }
+    }
+
+    /// Document IDs carrying an exact tag match (case/whitespace-normalized).
+    private static func tagMatchIDs(_ db: Database, tag: String) throws -> Set<String> {
+        let normalized = normalizeTag(tag)
+        guard !normalized.isEmpty else { return [] }
+        let rows = try Row.fetchAll(db, sql: """
+            SELECT doc_id FROM document_tags WHERE tag = ?
+        """, arguments: [normalized])
+        return Set(rows.compactMap { $0["doc_id"] as? String })
+    }
+
+    /// Document IDs whose title contains `title` (case-insensitive substring).
+    /// Substring — not prefix — matches the search-box mental model of "title
+    /// contains X". LIKE metacharacters in the user's text are escaped so they
+    /// match literally, and the pattern is passed as a bound parameter.
+    private static func titleMatchIDs(_ db: Database, title: String) throws -> Set<String> {
+        let needle = title.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !needle.isEmpty else { return [] }
+        let pattern = "%\(escapeLikePattern(needle))%"
+        let rows = try Row.fetchAll(db, sql: """
+            SELECT id FROM document_meta WHERE LOWER(title) LIKE ? ESCAPE '\\'
+        """, arguments: [pattern])
+        return Set(rows.compactMap { $0["id"] as? String })
+    }
+
+    /// Builds bare `SearchResult`s (no excerpt/score) from `document_meta` for a
+    /// set of IDs — used when a query has only metadata filters and no FTS terms.
+    private static func metadataResults(_ db: Database, ids: Set<String>) throws -> [SearchResult] {
+        let rows = try Row.fetchAll(db, sql: "SELECT id, title, path FROM document_meta")
+        var results: [SearchResult] = []
+        for row in rows {
+            guard let idString = row["id"] as? String, ids.contains(idString),
+                  let id = UUID(uuidString: idString) else { continue }
+            results.append(SearchResult(
+                documentID: id,
+                title: row["title"] as? String ?? "",
+                path: row["path"] as? String ?? "",
+                excerpt: "",
+                score: 0
+            ))
+        }
+        return results
     }
 
     public func index(document: Document) async throws {
@@ -132,16 +233,28 @@ public actor SQLiteSearchIndex: SearchService {
         try await dbPool.write { db in
             // Upsert metadata
             try db.execute(sql: """
-                INSERT OR REPLACE INTO document_meta (id, path, title, created_at, modified_at, tag_json)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO document_meta (id, path, title, created_at, modified_at)
+                VALUES (?, ?, ?, ?, ?)
             """, arguments: [
                 document.id.uuidString,
                 document.path,
                 document.title,
                 Int(document.created.timeIntervalSince1970),
-                Int(document.modified.timeIntervalSince1970),
-                try? JSONEncoder().encode(document.tags).base64EncodedString()
+                Int(document.modified.timeIntervalSince1970)
             ])
+
+            // Refresh normalized tags for this document (one queryable row per
+            // distinct tag). Normalizing at the storage boundary keeps writes
+            // consistent regardless of how the Document was constructed.
+            try db.execute(sql: "DELETE FROM document_tags WHERE doc_id = ?",
+                           arguments: [document.id.uuidString])
+            var seenTags = Set<String>()
+            for tag in document.tags {
+                let normalized = Self.normalizeTag(tag)
+                guard !normalized.isEmpty, seenTags.insert(normalized).inserted else { continue }
+                try db.execute(sql: "INSERT INTO document_tags (doc_id, tag) VALUES (?, ?)",
+                               arguments: [document.id.uuidString, normalized])
+            }
 
             // Remove old FTS entry
             try db.execute(sql: "DELETE FROM document_fts WHERE id = ?",
@@ -175,6 +288,7 @@ public actor SQLiteSearchIndex: SearchService {
         try await dbPool.write { db in
             let idStr = documentID.uuidString
             try db.execute(sql: "DELETE FROM document_meta WHERE id = ?", arguments: [idStr])
+            try db.execute(sql: "DELETE FROM document_tags WHERE doc_id = ?", arguments: [idStr])
             try db.execute(sql: "DELETE FROM document_fts WHERE id = ?", arguments: [idStr])
             try db.execute(sql: "DELETE FROM document_links WHERE source_id = ?", arguments: [idStr])
         }
@@ -194,6 +308,7 @@ public actor SQLiteSearchIndex: SearchService {
     ) async throws {
         try await dbPool.write { db in
             try db.execute(sql: "DELETE FROM document_meta")
+            try db.execute(sql: "DELETE FROM document_tags")
             try db.execute(sql: "DELETE FROM document_fts")
             try db.execute(sql: "DELETE FROM document_links")
         }
@@ -218,6 +333,24 @@ public actor SQLiteSearchIndex: SearchService {
     }
 
     // MARK: - Private
+
+    /// Canonical tag form for both storage and lookup: lowercased and
+    /// whitespace-trimmed. Interior characters (hyphens, dots, `+`, etc.) are
+    /// preserved so hyphenated tags like `swift-concurrency` round-trip.
+    private static func normalizeTag(_ tag: String) -> String {
+        tag.lowercased().trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Escapes SQL LIKE metacharacters (`\`, `%`, `_`) so a user's substring
+    /// filter matches literally. Pair with `ESCAPE '\'` in the query. This is
+    /// belt-and-suspenders on top of parameter binding: binding already blocks
+    /// injection; escaping additionally stops `%`/`_` from acting as wildcards.
+    private static func escapeLikePattern(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_")
+    }
 
     private static func stripFrontmatter(from content: String) -> String {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -300,16 +433,19 @@ struct SearchQueryParser {
                 let body = String(rawToken.dropFirst())
                 result.excludedTerms.append(contentsOf: Self.splitIntoWords(body))
             } else if rawToken.hasPrefix("tag:") {
-                // Tag filter: take the first word after the prefix
-                let body = String(rawToken.dropFirst(4))
-                if let firstWord = Self.splitIntoWords(body).first {
-                    result.tagFilter = firstWord
-                }
+                // Tag filter: keep the whole remaining token verbatim (minus
+                // surrounding whitespace) so hyphenated/dotted tags like
+                // `swift-concurrency` survive. The index matches it exactly
+                // against the normalized tag table via a bound parameter, so no
+                // FTS sanitization is needed or wanted here.
+                let body = String(rawToken.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+                if !body.isEmpty { result.tagFilter = body }
             } else if rawToken.hasPrefix("title:") {
-                let body = String(rawToken.dropFirst(6))
-                if let firstWord = Self.splitIntoWords(body).first {
-                    result.titleFilter = firstWord
-                }
+                // Title filter: keep the whole remaining token so multi-part
+                // titles like `my-note` aren't truncated to `my`. Matched as a
+                // case-insensitive substring via a bound, LIKE-escaped parameter.
+                let body = String(rawToken.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+                if !body.isEmpty { result.titleFilter = body }
             } else {
                 // Plain term: split on non-word boundaries so "KNOWLEDGE-BASE.md,"
                 // yields ["KNOWLEDGE", "BASE", "md"] instead of one unsearchable blob.
