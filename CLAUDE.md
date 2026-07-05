@@ -59,7 +59,7 @@ swiftlint --strict
 # Architecture-boundary check (offline, no build) — fails if Core imports
 # Infra/App/FoundationModels/AnyLanguageModel, if Infra imports App, or if
 # Core's Package.swift declares a dependency on Infra/AnyLanguageModel
-scripts/check-architecture.sh
+Scripts/check-architecture.sh
 ```
 
 Requires **Xcode 26+**, **XcodeGen** (`brew install xcodegen`), **SwiftLint** (`brew install swiftlint`), **macOS 26+** (deployment target — keep it at the OS/SDK actually installed; a higher target makes every test bundle unrunnable locally).
