@@ -1,13 +1,10 @@
 import Foundation
+import PunkRecordsCore
 
-/// Metadata captured for a single agent tool invocation. Stored on the
-/// corresponding ChatMessage when role == .tool.
-struct ToolCallInfo: Sendable {
-    let name: String
-    let arguments: String   // raw JSON from the agent event
-    var output: String = ""
-    var isError: Bool = false
-    var isInFlight: Bool = true
+/// App-layer presentation for a Core ``ToolCallInfo``: the SF Symbol, the
+/// human-friendly verb, and a one-line summary derived from the call's
+/// arguments. Kept out of Core so the model type stays free of UI concerns.
+extension ToolCallInfo {
 
     /// SF Symbol shown in the tool's bubble.
     var systemImageName: String {

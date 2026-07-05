@@ -43,7 +43,7 @@ struct VaultWindow: View {
 
                 if appState.isChatPanelVisible {
                     Divider()
-                    LLMChatPanel()
+                    LLMChatPanel(appState: appState)
                         .accessibilityIdentifier("chatPanel")
                 }
             }

@@ -1,4 +1,5 @@
 import SwiftUI
+import PunkRecordsCore
 
 /// Distinct bubble for an agent tool call. Visually attributed to the
 /// assistant via a leading accent stripe; an SF Symbol identifies the tool,

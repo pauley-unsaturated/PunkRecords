@@ -2,17 +2,6 @@ import Foundation
 import AppKit
 import PunkRecordsCore
 
-/// Snapshot of the context surrounding a chat message, captured at submission time.
-/// Attached to `ChatMessage` so "Report Issue" can later reconstruct what the user did.
-struct MessageContext: Sendable {
-    let scope: QueryScope
-    let scopeLabel: String
-    let currentDocumentID: DocumentID?
-    let selection: String?
-    let variantID: String
-    let userPrompt: String
-}
-
 /// Full structured bug report captured from a chat turn.
 struct IssueReport: Sendable {
     let timestamp: Date
