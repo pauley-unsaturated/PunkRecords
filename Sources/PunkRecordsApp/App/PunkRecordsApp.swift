@@ -76,15 +76,20 @@ struct PunkRecordsApp: App {
                 .keyboardShortcut("e", modifiers: [.command, .shift])
             }
             CommandGroup(after: .textEditing) {
-                Button("Filter Sidebar") {
-                    NotificationCenter.default.post(name: .vaultWindowFocusSidebarSearch, object: nil)
+                // ⌘⇧F — vault-wide full-text search (the "Find in Workspace"
+                // convention from Xcode/VS Code). Full-text/tag:/title: search
+                // over the same index the agent uses.
+                Button("Find in Vault…") {
+                    NotificationCenter.default.post(name: .vaultWindowFindInVault, object: nil)
                 }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
 
-                // ⌘⌥⇧F to leave ⌘⌥F available for NSTextView's standard
-                // Find-and-Replace bar (the in-editor find acceptance for W5).
-                Button("Find by Content…") {
-                    NotificationCenter.default.post(name: .vaultWindowFindInVault, object: nil)
+                // Sidebar title filter is the lighter, navigation-scoped filter;
+                // it moves to ⌘⌥⇧F now that ⌘⇧F drives full-text search. ⌘⌥F is
+                // deliberately left free for NSTextView's standard in-editor
+                // Find-and-Replace bar.
+                Button("Filter Sidebar") {
+                    NotificationCenter.default.post(name: .vaultWindowFocusSidebarSearch, object: nil)
                 }
                 .keyboardShortcut("f", modifiers: [.command, .option, .shift])
             }
