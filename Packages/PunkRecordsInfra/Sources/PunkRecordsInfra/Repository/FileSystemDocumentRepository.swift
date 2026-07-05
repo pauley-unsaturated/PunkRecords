@@ -133,11 +133,9 @@ public actor FileSystemDocumentRepository: DocumentRepository {
         guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else { return nil }
 
         var closingIndex: Int?
-        for i in 1..<lines.count {
-            if lines[i].trimmingCharacters(in: .whitespaces) == "---" {
-                closingIndex = i
-                break
-            }
+        for i in 1..<lines.count where lines[i].trimmingCharacters(in: .whitespaces) == "---" {
+            closingIndex = i
+            break
         }
         guard let endIndex = closingIndex else { return nil }
 

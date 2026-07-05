@@ -129,7 +129,8 @@ enum PreviewData {
     static let graphTheoryNote = Document(
         id: linkedDocID2,
         title: "Graph Theory Basics",
-        content: "# Graph Theory Basics\n\nA graph G = (V, E) consists of vertices and edges...\n\nSee [[Swift Concurrency Deep Dive]] for practical applications.",
+        content: "# Graph Theory Basics\n\nA graph G = (V, E) consists of vertices and edges...\n\n"
+            + "See [[Swift Concurrency Deep Dive]] for practical applications.",
         path: "math/graph-theory-basics.md",
         tags: ["math", "graph-theory"]
     )
@@ -183,7 +184,8 @@ enum PreviewData {
 
         You also have a related note on **Actor Reentrancy** that discusses subtle pitfalls.
 
-        Your checklist shows you still want to explore `AsyncSequence` patterns and `Sendable` conformance rules. Want me to compile a note on either of those topics?
+        Your checklist shows you still want to explore `AsyncSequence` patterns and `Sendable` \
+        conformance rules. Want me to compile a note on either of those topics?
         """),
     ]
 

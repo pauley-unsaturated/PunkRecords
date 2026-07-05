@@ -39,6 +39,10 @@ public struct TokenMetrics: Codable, Sendable {
         )
     }
 
+    public static func += (lhs: inout TokenMetrics, rhs: TokenMetrics) {
+        lhs = lhs + rhs
+    }
+
     public static let zero = TokenMetrics()
 }
 

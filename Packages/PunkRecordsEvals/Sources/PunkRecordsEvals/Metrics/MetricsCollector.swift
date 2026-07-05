@@ -46,7 +46,7 @@ public actor MetricsCollector {
                 currentToolName = nil
             case .turnEnd(_, let usage):
                 if let usage {
-                    currentTurnTokens = currentTurnTokens + TokenMetrics(from: usage)
+                    currentTurnTokens += TokenMetrics(from: usage)
                 }
                 let elapsed = currentTurnStart.map { ContinuousClock.now - $0 } ?? .zero
                 completedTurns.append(TurnMetrics(

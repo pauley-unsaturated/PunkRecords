@@ -44,11 +44,15 @@ public indirect enum ToolProperty: Sendable {
     case property(type: String, description: String, enumValues: [String]? = nil, items: ToolProperty? = nil)
 
     public var type: String {
-        switch self { case .property(let t, _, _, _): return t }
+        switch self {
+        case .property(let t, _, _, _): return t
+        }
     }
 
     public var description: String {
-        switch self { case .property(_, let d, _, _): return d }
+        switch self {
+        case .property(_, let d, _, _): return d
+        }
     }
 
     public init(type: String, description: String, enumValues: [String]? = nil, items: ToolProperty? = nil) {

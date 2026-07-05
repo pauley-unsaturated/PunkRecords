@@ -38,7 +38,8 @@ public struct CreateNoteTool: AgentTool, Sendable {
         }
         guard let content = arguments["content"] as? String, !content.isEmpty else {
             return ToolResult(
-                content: "Missing or empty 'content' parameter. Provide the note's markdown body (without frontmatter — that's added automatically).",
+                content: "Missing or empty 'content' parameter. Provide the note's markdown body "
+                    + "(without frontmatter — that's added automatically).",
                 isError: true
             )
         }

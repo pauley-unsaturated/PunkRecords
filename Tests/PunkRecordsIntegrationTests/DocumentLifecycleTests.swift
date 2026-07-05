@@ -6,7 +6,12 @@ import PunkRecordsTestSupport
 @Suite("Document Lifecycle Integration Tests")
 struct DocumentLifecycleTests {
 
-    private func makeTempVault() throws -> (vault: Vault, repo: FileSystemDocumentRepository, index: SQLiteSearchIndex, cleanup: @Sendable () -> Void) {
+    private func makeTempVault() throws -> (
+        vault: Vault,
+        repo: FileSystemDocumentRepository,
+        index: SQLiteSearchIndex,
+        cleanup: @Sendable () -> Void
+    ) {
         let factory = TempVaultFactory()
         let (vault, cleanup) = try factory.createTempVault()
         let repo = FileSystemDocumentRepository(vaultRoot: vault.rootURL)

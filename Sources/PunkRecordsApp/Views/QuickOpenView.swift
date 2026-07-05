@@ -121,6 +121,8 @@ private struct QuickOpenRow: View {
         var result = Text("")
         for (i, c) in chars.enumerated() {
             let piece = Text(String(c))
+            // SwiftUI.Text has no += overload, only `+`, so this can't be shortened.
+            // swiftlint:disable:next shorthand_operator
             result = result + (hits.contains(i) ? piece.bold().foregroundColor(.accentColor) : piece)
         }
         return result

@@ -104,6 +104,10 @@ private func fsEventCallback(
     guard let info = clientCallBackInfo else { return }
     let watcher = Unmanaged<FSEventStreamWatcher>.fromOpaque(info).takeUnretainedValue()
 
+    // FSEventStream always delivers a CFArray of CFString paths per Apple's documented
+    // contract; a mismatch here means the OS invariant broke, so crash loudly rather
+    // than mask it with a guarded fallback that can never legitimately trigger.
+    // swiftlint:disable:next force_cast
     let paths = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue() as! [String]
 
     var events: [FSEvent] = []

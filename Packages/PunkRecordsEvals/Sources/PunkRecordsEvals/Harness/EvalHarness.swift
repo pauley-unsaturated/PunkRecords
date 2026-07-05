@@ -208,17 +208,13 @@ public struct EvalHarness: Sendable {
         }
 
         // Required content
-        for keyword in groundTruth.requiredContent {
-            if !lower.contains(keyword.lowercased()) {
-                failures.append("Missing required content: '\(keyword)'")
-            }
+        for keyword in groundTruth.requiredContent where !lower.contains(keyword.lowercased()) {
+            failures.append("Missing required content: '\(keyword)'")
         }
 
         // Forbidden content
-        for keyword in groundTruth.forbiddenContent {
-            if lower.contains(keyword.lowercased()) {
-                failures.append("Contains forbidden content: '\(keyword)'")
-            }
+        for keyword in groundTruth.forbiddenContent where lower.contains(keyword.lowercased()) {
+            failures.append("Contains forbidden content: '\(keyword)'")
         }
 
         // Tool sequence
@@ -271,8 +267,8 @@ public struct EvalHarness: Sendable {
             if words < min { return "Word count: \(words) < required \(min)" }
         case .noMetaCommentary:
             let banned = ["Here is the", "Here's the", "I've converted", "Sure, here", "Certainly!"]
-            for phrase in banned {
-                if output.contains(phrase) { return "Meta-commentary found: '\(phrase)'" }
+            for phrase in banned where output.contains(phrase) {
+                return "Meta-commentary found: '\(phrase)'"
             }
         }
         return nil

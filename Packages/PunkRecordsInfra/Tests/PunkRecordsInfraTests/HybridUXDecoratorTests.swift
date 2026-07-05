@@ -239,9 +239,13 @@ struct HybridUXDecoratorTests {
         textView.string = "# Title\n\nSome **bold** text."
         let decorator = HybridUXDecorator()
         decorator.decorate(textView: textView)
+        // NSTextStorage.copy() is documented to return an immutable NSAttributedString
+        // for any NSMutableAttributedString subclass, so this cast cannot fail.
+        // swiftlint:disable:next force_cast
         let snapshot1 = textView.textStorage!.copy() as! NSAttributedString
 
         decorator.decorate(textView: textView)
+        // swiftlint:disable:next force_cast
         let snapshot2 = textView.textStorage!.copy() as! NSAttributedString
 
         #expect(snapshot1.isEqual(to: snapshot2))

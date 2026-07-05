@@ -91,7 +91,9 @@ public struct VariantComparison: Codable, Sendable {
             case .unchanged: arrow = "–"
             }
             let pct = d.percentChange.isFinite ? String(format: "%+.1f%%", d.percentChange * 100) : "∞"
-            lines.append("- **\(d.metric)** \(arrow) \(String(format: "%.2f", d.baselineValue)) → \(String(format: "%.2f", d.candidateValue)) (\(pct))")
+            let baselineStr = String(format: "%.2f", d.baselineValue)
+            let candidateStr = String(format: "%.2f", d.candidateValue)
+            lines.append("- **\(d.metric)** \(arrow) \(baselineStr) → \(candidateStr) (\(pct))")
         }
         if !regressedScenarios.isEmpty {
             lines.append("")

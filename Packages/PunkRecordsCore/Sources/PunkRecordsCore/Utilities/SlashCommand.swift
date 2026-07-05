@@ -118,11 +118,9 @@ public enum SlashCommandLibrary {
     private static func isSubsequence(_ needle: [Character], of haystack: [Character]) -> Bool {
         guard !needle.isEmpty else { return true }
         var n = 0
-        for c in haystack {
-            if c == needle[n] {
-                n += 1
-                if n == needle.count { return true }
-            }
+        for c in haystack where c == needle[n] {
+            n += 1
+            if n == needle.count { return true }
         }
         return false
     }

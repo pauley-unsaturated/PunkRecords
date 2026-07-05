@@ -357,10 +357,8 @@ public actor SQLiteSearchIndex: SearchService {
         guard trimmed.hasPrefix("---") else { return content }
         let lines = content.components(separatedBy: .newlines)
         guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else { return content }
-        for i in 1..<lines.count {
-            if lines[i].trimmingCharacters(in: .whitespaces) == "---" {
-                return Array(lines[(i + 1)...]).joined(separator: "\n")
-            }
+        for i in 1..<lines.count where lines[i].trimmingCharacters(in: .whitespaces) == "---" {
+            return Array(lines[(i + 1)...]).joined(separator: "\n")
         }
         return content
     }

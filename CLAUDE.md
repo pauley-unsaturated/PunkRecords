@@ -52,7 +52,9 @@ TEST_RUNNER_PUNKRECORDS_LIVE_EVALS=1 xcodebuild -scheme PunkRecords -configurati
 TEST_RUNNER_PUNKRECORDS_LIVE_EVALS=1 TEST_RUNNER_PUNKRECORDS_EVAL_SAMPLE=5 xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -only-testing:PunkRecordsEvalTests/FlywheelRunEvals
 TEST_RUNNER_PUNKRECORDS_LIVE_EVALS=1 TEST_RUNNER_PUNKRECORDS_EVAL_VARIANT_B=terse-v1 xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -only-testing:PunkRecordsEvalTests/FlywheelRunEvals
 
-# Lint (style backstop) — run before committing; --strict turns warnings into errors
+# Lint — run before committing. The warning backlog is paid down to zero, so
+# `swiftlint --strict` (warnings become errors) is the expected pre-commit gate
+# and must exit 0.
 swiftlint
 swiftlint --strict
 
@@ -88,7 +90,7 @@ SwiftUI/AppKit layer. To keep that gap from growing, follow this order:
    and rendering appearance have poor automation ROI — validate by hand and say
    so in the issue's close reason so it's clear what was *not* automated.
 
-Run `swiftlint` before every commit as a style backstop (see Build Commands).
+Run `swiftlint --strict` before every commit — it's the expected pre-commit gate (see Build Commands).
 
 ## Architecture
 

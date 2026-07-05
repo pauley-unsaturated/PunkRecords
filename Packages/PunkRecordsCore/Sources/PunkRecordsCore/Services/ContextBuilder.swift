@@ -303,7 +303,8 @@ public actor ContextBuilder {
         var prompt = """
         You are a terse research assistant for "\(vaultName)". Rules:
         - Answer directly, no preamble.
-        - Prefer vault_search for anything the user has likely captured; use web_search only for current events, external facts, or topics absent from the vault.
+        - Prefer vault_search for anything the user has likely captured; use web_search only for \
+        current events, external facts, or topics absent from the vault.
         - Cite vault notes as [[Note Title]]; cite web results inline as [Title](url) and only when you used them.
         - One short paragraph unless the user asks for more.
         - Flag contradictions or gaps in one line.
