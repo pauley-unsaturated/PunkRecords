@@ -112,6 +112,16 @@ public enum VaultPaths {
         return UUID(uuidString: stem)
     }
 
+    /// Vault-relative path of the sidecar cache holding per-thread embedding
+    /// vectors for semantic thread search (see `EmbeddingIndexingThreadStore`).
+    /// Lives beside the thread JSON files; its non-`{uuid}.json` name means
+    /// ``chatThreadID(fromThreadFilename:)`` — and therefore the thread store's
+    /// `summaries()` scan — skips it. Keyed by thread id inside the file, with
+    /// each entry invalidated by its thread's `updatedAt`.
+    public static var chatThreadEmbeddingCachePath: RelativePath {
+        "\(chatThreadsDirectory)/embeddings-cache.json"
+    }
+
     /// Vault-relative path of the legacy single-transcript chat persistence
     /// (`punkrecords-chat-transcript-v1`) the per-thread store migrates away from.
     public static var legacyChatTranscriptPath: RelativePath { ".punkrecords/chat-transcript.md" }

@@ -53,8 +53,18 @@ final class ChatSessionController {
     /// after every save/delete.
     private(set) var threadSummaries: [ThreadSummary] = []
 
-    /// Resolved lazily from the open vault by ``loadInitialThread()``.
-    private var threadStore: FileSystemThreadStore?
+    /// Resolved lazily from the open vault by ``loadInitialThread()``. This is the
+    /// embedding-indexing decorator wrapping the file store, so every persisted
+    /// thread gets an on-device embedding for `read_thread`'s semantic mode.
+    private var threadStore: (any ThreadStore)?
+
+    /// The same object as ``threadStore``, surfaced as its ``ThreadVectorSource``
+    /// so `read_thread` can read cached per-thread vectors. `nil` until wired.
+    private var threadVectorSource: (any ThreadVectorSource)?
+
+    /// On-device embedder for `read_thread` query vectors and per-thread indexing.
+    /// Loads its NaturalLanguage model lazily on first use.
+    private let threadEmbedder: any ThreadEmbedder = NLThreadEmbedder()
 
     // MARK: - Composer input
 
@@ -248,13 +258,23 @@ final class ChatSessionController {
                 vaultRoot: appState.currentVault?.rootURL,
                 jinaConsent: WebFetchConsentPrompt.makeConsentClosure(store: consentStore)
             )
-            let tools: [any AgentTool] = [
+            var tools: [any AgentTool] = [
                 VaultSearchTool(searchService: searchIndex),
                 ReadDocumentTool(repository: repository),
                 CreateNoteTool(repository: repository),
                 ListDocumentsTool(repository: repository),
                 WebFetchTool(fetcher: webFetcher),
             ]
+            // Let the model reference the user's other saved conversations. The
+            // active thread is excluded so it never cites the chat it's already in.
+            if let threadStore {
+                tools.append(ReadThreadTool(
+                    store: threadStore,
+                    embedder: threadEmbedder,
+                    vectors: threadVectorSource,
+                    activeThreadID: activeThread?.id
+                ))
+            }
 
             // Fold any selected text into the user prompt, matching AgentLoop.
             let userPrompt: String
@@ -297,13 +317,23 @@ final class ChatSessionController {
     /// `.task`, which may re-run on reappearance.
     func loadInitialThread() async {
         guard let vaultRoot = appState.currentVault?.rootURL else { return }
-        let store = threadStore ?? FileSystemThreadStore(vaultRoot: vaultRoot)
-        threadStore = store
 
-        do {
-            try await store.migrateLegacyTranscriptIfNeeded()
-        } catch {
-            appState.errorMessage = "Failed to migrate chat history: \(error.localizedDescription)"
+        if threadStore == nil {
+            // Migrate on the concrete file store (migration is file-store-specific),
+            // then wrap it in the embedding-indexing decorator used from here on.
+            let fileStore = FileSystemThreadStore(vaultRoot: vaultRoot)
+            do {
+                try await fileStore.migrateLegacyTranscriptIfNeeded()
+            } catch {
+                appState.errorMessage = "Failed to migrate chat history: \(error.localizedDescription)"
+            }
+            let indexed = EmbeddingIndexingThreadStore(
+                inner: fileStore,
+                embedder: threadEmbedder,
+                vaultRoot: vaultRoot
+            )
+            threadStore = indexed
+            threadVectorSource = indexed
         }
 
         await refreshThreadSummaries()
@@ -311,7 +341,8 @@ final class ChatSessionController {
         // Already showing a thread (e.g. .task re-ran) — don't clobber it.
         guard activeThread == nil else { return }
 
-        if let newest = threadSummaries.first,
+        if let store = threadStore,
+           let newest = threadSummaries.first,
            let loaded = try? await store.load(id: newest.id) {
             activate(loaded)
         } else {
