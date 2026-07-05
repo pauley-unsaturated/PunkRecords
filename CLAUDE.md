@@ -33,6 +33,25 @@ TEST_RUNNER_PUNKRECORDS_LIVE_EVALS=1 xcodebuild -scheme PunkRecords -configurati
 # Live evals against a real on-disk vault (ALWAYS a disposable copy — create_note writes):
 TEST_RUNNER_PUNKRECORDS_LIVE_EVALS=1 TEST_RUNNER_PUNKRECORDS_EVAL_VAULT=/path/to/vault-copy xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -only-testing:PunkRecordsEvalTests/LiveMusicDSPEvals
 
+# Eval flywheel — run the 21 diverseScenarios through the CURRENT PromptVariant on
+# the real session path, aggregate an EvalReport, persist it to
+# ~/.punkrecords/eval-results, and print a per-scenario summary + trend delta vs the
+# previous stored report. Real Anthropic API cost (~$0.30-0.60 for the full set).
+# Suggested cadence: run WEEKLY (or after any ContextBuilder/prompt change) to keep
+# a trend line; sample daily if you want a cheaper signal between full runs.
+TEST_RUNNER_PUNKRECORDS_LIVE_EVALS=1 xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -only-testing:PunkRecordsEvalTests/FlywheelRunEvals
+
+# Flywheel knobs (env vars; both take the TEST_RUNNER_ prefix under xcodebuild):
+#   PUNKRECORDS_EVAL_SAMPLE=n        run a DETERMINISTIC n-scenario subset (same n on
+#                                    the same calendar day picks the same scenarios,
+#                                    so intra-day reruns stay comparable).
+#   PUNKRECORDS_EVAL_VARIANT_B=<id>  also A/B the current variant (baseline) against a
+#                                    stored variant <id> (candidate) and print a
+#                                    VariantComparator recommendation. Runs each
+#                                    scenario twice — 2xN live calls on top of the base run.
+TEST_RUNNER_PUNKRECORDS_LIVE_EVALS=1 TEST_RUNNER_PUNKRECORDS_EVAL_SAMPLE=5 xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -only-testing:PunkRecordsEvalTests/FlywheelRunEvals
+TEST_RUNNER_PUNKRECORDS_LIVE_EVALS=1 TEST_RUNNER_PUNKRECORDS_EVAL_VARIANT_B=terse-v1 xcodebuild -scheme PunkRecords -configuration Debug -skipMacroValidation test -only-testing:PunkRecordsEvalTests/FlywheelRunEvals
+
 # Lint (style backstop) — run before committing; --strict turns warnings into errors
 swiftlint
 swiftlint --strict
