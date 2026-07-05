@@ -60,11 +60,11 @@ public enum LanguageModelFactory {
         public var claudeModel: String
 
         public init(
-            ollamaModel: String = "qwen3",
-            ollamaEndpoint: URL = URL(string: "http://localhost:11434")!,
-            openAIModel: String = "gpt-4o",
+            ollamaModel: String = ProviderRegistry.defaultOllamaModel,
+            ollamaEndpoint: URL = ProviderRegistry.defaultOllamaEndpoint,
+            openAIModel: String = ProviderRegistry.defaultOpenAIModel,
             openAIEndpoint: URL? = nil,
-            claudeModel: String = "claude-sonnet-4-6"
+            claudeModel: String = ProviderRegistry.defaultClaudeModel
         ) {
             self.ollamaModel = ollamaModel
             self.ollamaEndpoint = ollamaEndpoint
@@ -75,19 +75,20 @@ public enum LanguageModelFactory {
 
         /// Build a config from the app's persisted settings (the `@AppStorage`
         /// keys `SettingsView` writes), so non-view call sites resolve the
-        /// same endpoints the UI configured.
+        /// same endpoints the UI configured. Key names and parsing rules come
+        /// from ``ProviderRegistry`` so there is one authoritative copy.
         public static func fromUserDefaults(_ defaults: UserDefaults = .standard) -> Config {
-            var config = Config()
-            if let model = defaults.string(forKey: "ollama.model"), !model.isEmpty {
-                config.ollamaModel = model
-            }
-            if let raw = defaults.string(forKey: "ollama.baseURL"), let url = URL(string: raw), !raw.isEmpty {
-                config.ollamaEndpoint = url
-            }
-            if let raw = defaults.string(forKey: "openai.baseURL"), let url = URL(string: raw), !raw.isEmpty {
-                config.openAIEndpoint = url
-            }
-            return config
+            Config(
+                ollamaModel: ProviderRegistry.ollamaModel(
+                    from: defaults.string(forKey: ProviderRegistry.DefaultsKey.ollamaModel)
+                ),
+                ollamaEndpoint: ProviderRegistry.ollamaEndpoint(
+                    from: defaults.string(forKey: ProviderRegistry.DefaultsKey.ollamaBaseURL)
+                ),
+                openAIEndpoint: ProviderRegistry.openAIEndpoint(
+                    from: defaults.string(forKey: ProviderRegistry.DefaultsKey.openAIBaseURL)
+                )
+            )
         }
     }
 
@@ -122,7 +123,7 @@ public enum LanguageModelFactory {
             return OllamaLanguageModel(baseURL: config.ollamaEndpoint, model: config.ollamaModel)
 
         case .openAI:
-            let key = try requireKey(from: keychain, provider: "openai")
+            let key = try requireKey(from: keychain, provider: ProviderRegistry.KeychainAccount.openAI)
             if let endpoint = config.openAIEndpoint {
                 return OpenAILanguageModel(baseURL: endpoint, apiKey: key, model: config.openAIModel)
             }
@@ -142,7 +143,7 @@ public enum LanguageModelFactory {
             // parallel FoundationModels.LanguageModelSession driver and split the
             // session path. Keeping one unified session path is the deliberate
             // choice; the system-protocol backend stays a future option.
-            let key = try requireKey(from: keychain, provider: "anthropic")
+            let key = try requireKey(from: keychain, provider: ProviderRegistry.KeychainAccount.anthropic)
             return AnthropicLanguageModel(apiKey: key, model: config.claudeModel)
         }
     }

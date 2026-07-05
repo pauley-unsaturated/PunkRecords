@@ -10,27 +10,23 @@ struct LLMChatPanel: View {
     @Environment(AppState.self) private var appState
     @State private var controller: ChatSessionController
     @State private var scope: QueryScope = .global
-    @AppStorage("chatProviderID") private var chatProviderRaw: String = LLMProviderID.anthropic.rawValue
-    @AppStorage("ollama.model") private var ollamaModel = "qwen3"
-    @AppStorage("ollama.baseURL") private var ollamaBaseURL = "http://localhost:11434"
-    @AppStorage("openai.baseURL") private var openAIBaseURL = ""
+    @AppStorage(ProviderRegistry.DefaultsKey.chatProvider)
+    private var chatProviderRaw: String = ProviderRegistry.chatProviderDefault.rawValue
 
     init(appState: AppState) {
         _controller = State(initialValue: ChatSessionController(appState: appState))
     }
 
     private var selectedProviderID: LLMProviderID {
-        LLMProviderID(rawValue: chatProviderRaw) ?? .anthropic
+        ProviderRegistry.chatProvider(from: chatProviderRaw)
     }
 
-    /// Endpoint/model config sourced from Settings, used both to decide
-    /// availability and to build the backing model for a turn.
+    /// Endpoint/model config sourced from Settings (the `@AppStorage` keys the
+    /// Providers tab writes), used both to decide availability and to build the
+    /// backing model for a turn. `fromUserDefaults` reads the same persisted
+    /// keys through ``ProviderRegistry``, so the panel holds no parsing of its own.
     private var factoryConfig: LanguageModelFactory.Config {
-        LanguageModelFactory.Config(
-            ollamaModel: ollamaModel.isEmpty ? "qwen3" : ollamaModel,
-            ollamaEndpoint: URL(string: ollamaBaseURL) ?? URL(string: "http://localhost:11434")!,
-            openAIEndpoint: openAIBaseURL.isEmpty ? nil : URL(string: openAIBaseURL)
-        )
+        .fromUserDefaults()
     }
 
     /// Volatile per-turn inputs resolved from settings + live app state, handed

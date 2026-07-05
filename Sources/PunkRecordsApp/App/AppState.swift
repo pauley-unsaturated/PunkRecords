@@ -126,8 +126,10 @@ final class AppState {
             self.noteCompiler = NoteCompiler(
                 completer: DeferredSessionTextCompleter(
                     provider: { @Sendable in
-                        UserDefaults.standard.string(forKey: "chatProviderID")
-                            .flatMap(LLMProviderID.init(rawValue:)) ?? fallbackProvider
+                        ProviderRegistry.chatProvider(
+                            from: UserDefaults.standard.string(forKey: ProviderRegistry.DefaultsKey.chatProvider),
+                            default: fallbackProvider
+                        )
                     },
                     keychain: keychainService
                 ),

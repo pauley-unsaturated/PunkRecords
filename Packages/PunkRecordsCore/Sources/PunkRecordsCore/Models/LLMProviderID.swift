@@ -18,23 +18,16 @@ public enum LLMProviderID: String, Codable, Sendable, Hashable, CaseIterable {
         }
     }
 
+    /// Whether this provider accepts image attachments natively.
+    /// Authoritative table lives in ``ProviderRegistry`` — this is a convenience
+    /// accessor so call sites can read `provider.nativeImageInput`.
     public var nativeImageInput: Bool {
-        switch self {
-        case .foundationModels:
-            return false
-        case .anthropic, .openAI, .anyLanguageModel:
-            return true
-        }
+        ProviderRegistry.nativeImageInput(self)
     }
 
+    /// Longest image edge (px) accepted before downscaling. Delegates to the
+    /// single source of truth in ``ProviderRegistry``.
     public var maximumImageEdge: Int {
-        switch self {
-        case .anthropic:
-            return 1_568
-        case .openAI, .anyLanguageModel:
-            return 2_048
-        case .foundationModels:
-            return 0
-        }
+        ProviderRegistry.maximumImageEdge(self)
     }
 }

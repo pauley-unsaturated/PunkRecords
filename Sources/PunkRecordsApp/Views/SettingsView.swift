@@ -25,7 +25,8 @@ struct SettingsView: View {
 // MARK: - General
 
 private struct GeneralSettingsTab: View {
-    @AppStorage("chatProviderID") private var chatProviderRaw = LLMProviderID.anthropic.rawValue
+    @AppStorage(ProviderRegistry.DefaultsKey.chatProvider)
+    private var chatProviderRaw = ProviderRegistry.chatProviderDefault.rawValue
 
     var body: some View {
         Form {
@@ -52,9 +53,12 @@ private struct ProvidersSettingsTab: View {
     // Endpoint config persists immediately (no key to store), so it lives in
     // AppStorage and is shared with the chat panel / model factory via the
     // same keys. Empty OpenAI base URL means the official endpoint.
-    @AppStorage("ollama.model") private var ollamaModel = "qwen3"
-    @AppStorage("ollama.baseURL") private var ollamaBaseURL = "http://localhost:11434"
-    @AppStorage("openai.baseURL") private var openAIBaseURL = ""
+    @AppStorage(ProviderRegistry.DefaultsKey.ollamaModel)
+    private var ollamaModel = ProviderRegistry.defaultOllamaModel
+    @AppStorage(ProviderRegistry.DefaultsKey.ollamaBaseURL)
+    private var ollamaBaseURL = ProviderRegistry.defaultOllamaBaseURL
+    @AppStorage(ProviderRegistry.DefaultsKey.openAIBaseURL)
+    private var openAIBaseURL = ProviderRegistry.defaultOpenAIBaseURL
     private let keychainService = KeychainService()
 
     var body: some View {
@@ -73,14 +77,14 @@ private struct ProvidersSettingsTab: View {
             Section("Claude — Anthropic") {
                 SecureField("API Key", text: $anthropicKey)
                     .onAppear {
-                        anthropicKey = (try? keychainService.apiKey(for: "anthropic")) ?? ""
+                        anthropicKey = (try? keychainService.apiKey(for: ProviderRegistry.KeychainAccount.anthropic)) ?? ""
                     }
             }
 
             Section("OpenAI / Compatible") {
                 SecureField("API Key", text: $openAIKey)
                     .onAppear {
-                        openAIKey = (try? keychainService.apiKey(for: "openai")) ?? ""
+                        openAIKey = (try? keychainService.apiKey(for: ProviderRegistry.KeychainAccount.openAI)) ?? ""
                     }
                 TextField("Base URL (blank = api.openai.com)", text: $openAIBaseURL)
                     .help("Any OpenAI-compatible endpoint, e.g. http://localhost:1234/v1 for "
@@ -107,8 +111,8 @@ private struct ProvidersSettingsTab: View {
     }
 
     private func saveKeys() {
-        try? keychainService.setAPIKey(anthropicKey, for: "anthropic")
-        try? keychainService.setAPIKey(openAIKey, for: "openai")
+        try? keychainService.setAPIKey(anthropicKey, for: ProviderRegistry.KeychainAccount.anthropic)
+        try? keychainService.setAPIKey(openAIKey, for: ProviderRegistry.KeychainAccount.openAI)
     }
 }
 

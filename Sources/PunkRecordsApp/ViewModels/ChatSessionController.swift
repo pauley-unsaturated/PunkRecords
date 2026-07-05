@@ -188,19 +188,6 @@ final class ChatSessionController {
         isStreaming = false
     }
 
-    /// Conservative context-window budget per provider, used to size the
-    /// `ContextBuilder` instructions. Mirrors the `maxContextTokens` defaults of
-    /// each backend's own context budget so the session path selects the
-    /// same context tier the `AgentLoop` path did.
-    private static func contextBudget(for provider: LLMProviderID) -> Int {
-        switch provider {
-        case .foundationModels: return 4_000
-        case .anyLanguageModel: return 8_192
-        case .openAI: return 128_000
-        case .anthropic: return 200_000
-        }
-    }
-
     /// Produce an `AgentEvent` stream via the FoundationModels session path
     /// (`SessionAgentRunner` + `LanguageModelFactory` + `buildInstructions`) and
     /// fold it into the transcript. The session owns the agentic tool loop; this
@@ -233,7 +220,7 @@ final class ChatSessionController {
                 prompt: text,
                 scope: turn.scope,
                 currentDocumentID: turn.currentDocumentID,
-                maxTokens: Self.contextBudget(for: turn.provider),
+                maxTokens: ProviderRegistry.contextBudget(for: turn.provider),
                 vaultName: turn.vaultName
             )
 
