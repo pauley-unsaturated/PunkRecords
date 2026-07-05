@@ -3,7 +3,7 @@ import Foundation
 /// Snapshot of the context surrounding a chat message, captured at submission
 /// time. Attached to ``ChatMessage`` so "Report Issue" can later reconstruct
 /// what the user did.
-public struct MessageContext: Sendable {
+public struct MessageContext: Sendable, Codable, Equatable {
     public let scope: QueryScope
     public let scopeLabel: String
     public let currentDocumentID: DocumentID?

@@ -1,12 +1,20 @@
 import Foundation
-import PunkRecordsCore
 
-enum ChatTranscriptStore {
-    static func load(vaultRoot: URL) throws -> [ChatMessage] {
-        let url = transcriptURL(vaultRoot: vaultRoot)
-        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+/// Parser / renderer for the *legacy* single-transcript chat format
+/// (`punkrecords-chat-transcript-v1`): the markdown-comment layout the app used
+/// before per-thread JSON persistence. Kept as a pure Core function so the
+/// migration path (`FileSystemThreadStore`) can read an old transcript and
+/// convert it into a ``ChatThread`` without duplicating the parse, and so the
+/// format is unit-testable off the filesystem.
+///
+/// Only `user` / `assistant` rows were ever persisted; tool-call chips are not
+/// part of the legacy format.
+public enum LegacyChatTranscript {
+    public static let marker = "<!-- punkrecords-chat-transcript-v1 -->"
 
-        let text = try String(contentsOf: url, encoding: .utf8)
+    /// Parse legacy transcript text into chat messages. Unrecognized lines are
+    /// ignored; a malformed attachment comment throws.
+    public static func parse(_ text: String) throws -> [ChatMessage] {
         var messages: [ChatMessage] = []
         var currentRole: ChatMessage.Role?
         var contentLines: [String] = []
@@ -24,7 +32,8 @@ enum ChatTranscriptStore {
                 if let currentRole {
                     messages.append(ChatMessage(
                         role: currentRole,
-                        content: contentLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines),
+                        content: contentLines.joined(separator: "\n")
+                            .trimmingCharacters(in: .whitespacesAndNewlines),
                         attachments: attachments,
                         attachmentTranscript: try ChatAttachmentPolicy.transcriptComments(for: attachments)
                     ))
@@ -46,17 +55,11 @@ enum ChatTranscriptStore {
         return messages
     }
 
-    static func save(messages: [ChatMessage], vaultRoot: URL) throws {
-        let url = transcriptURL(vaultRoot: vaultRoot)
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try markdown(for: messages).write(to: url, atomically: true, encoding: .utf8)
-    }
-
-    static func markdown(for messages: [ChatMessage]) throws -> String {
-        var chunks = ["<!-- punkrecords-chat-transcript-v1 -->"]
+    /// Render messages back into the legacy transcript format. Retained so tests
+    /// (and any future export) can produce a canonical transcript; the running
+    /// app no longer writes this format.
+    public static func render(_ messages: [ChatMessage]) throws -> String {
+        var chunks = [marker]
 
         for message in messages where message.role != .tool {
             var lines = [
@@ -78,11 +81,7 @@ enum ChatTranscriptStore {
         return chunks.joined(separator: "\n\n") + "\n"
     }
 
-    static func transcriptURL(vaultRoot: URL) -> URL {
-        vaultRoot
-            .appendingPathComponent(".punkrecords", isDirectory: true)
-            .appendingPathComponent("chat-transcript.md")
-    }
+    // MARK: - Line parsing
 
     private static func roleMarker(in line: String) -> ChatMessage.Role? {
         if line == "<!-- message: user -->" { return .user }
@@ -101,22 +100,9 @@ enum ChatTranscriptStore {
 
         let jsonStart = line.index(line.startIndex, offsetBy: prefix.count)
         let jsonEnd = line.index(line.endIndex, offsetBy: -suffix.count)
-        let metadata = try JSONDecoder().decode(
+        return try JSONDecoder().decode(
             ChatAttachmentMetadata.self,
             from: Data(line[jsonStart..<jsonEnd].utf8)
-        )
-        _ = resolvedURL(for: metadata)
-        return metadata
-    }
-
-    private static func resolvedURL(for metadata: ChatAttachmentMetadata) -> URL? {
-        guard let bookmarkData = Data(base64Encoded: metadata.bookmarkBase64) else { return nil }
-        var isStale = false
-        return try? URL(
-            resolvingBookmarkData: bookmarkData,
-            options: [.withSecurityScope],
-            relativeTo: nil,
-            bookmarkDataIsStale: &isStale
         )
     }
 }

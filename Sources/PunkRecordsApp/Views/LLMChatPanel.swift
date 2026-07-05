@@ -10,6 +10,8 @@ struct LLMChatPanel: View {
     @Environment(AppState.self) private var appState
     @State private var controller: ChatSessionController
     @State private var scope: QueryScope = .global
+    @State private var threadPendingDeletion: ThreadSummary?
+    @State private var isShowingDeleteConfirmation = false
     @AppStorage(ProviderRegistry.DefaultsKey.chatProvider)
     private var chatProviderRaw: String = ProviderRegistry.chatProviderDefault.rawValue
 
@@ -54,6 +56,8 @@ struct LLMChatPanel: View {
                 Spacer()
                 providerPicker
                 scopePicker
+                threadMenu
+                newChatButton
                 Button("Close", systemImage: "xmark.circle.fill") {
                     appState.isChatPanelVisible = false
                 }
@@ -64,7 +68,7 @@ struct LLMChatPanel: View {
             .padding(.vertical, 8)
             .background(providerKeyboardShortcuts)
             .task {
-                controller.loadTranscript()
+                await controller.loadInitialThread()
 
                 // Re-probe while the panel is open so a provider that comes online
                 // after launch (e.g. you start `ollama serve`, or add an API key in
@@ -153,6 +157,65 @@ struct LLMChatPanel: View {
         } message: {
             Text("Apple does not support image attachments. Switch to Claude or GPT to send images.")
         }
+        .alert("Delete this chat?", isPresented: $isShowingDeleteConfirmation, presenting: threadPendingDeletion) { summary in
+            Button("Delete", role: .destructive) {
+                Task { await controller.deleteThread(id: summary.id) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { summary in
+            Text("“\(summary.title)” will be permanently deleted. This can't be undone.")
+        }
+    }
+
+    /// Thread switcher: lists saved conversations (newest first, current checked)
+    /// and a submenu to delete one. Kept out of the `chatProviderPicker` /
+    /// `chatPanel`-identified menu set so the provider picker stays the first
+    /// menu button `ChatTurnUITests` reaches for.
+    private var threadMenu: some View {
+        Menu {
+            ForEach(controller.threadSummaries) { summary in
+                Button {
+                    Task { await controller.switchTo(threadID: summary.id) }
+                } label: {
+                    HStack {
+                        if summary.id == controller.activeThread?.id {
+                            Image(systemName: "checkmark")
+                        }
+                        Text(summary.title)
+                    }
+                }
+            }
+
+            if !controller.threadSummaries.isEmpty {
+                Divider()
+                Menu("Delete Chat") {
+                    ForEach(controller.threadSummaries) { summary in
+                        Button(role: .destructive) {
+                            threadPendingDeletion = summary
+                            isShowingDeleteConfirmation = true
+                        } label: {
+                            Text(summary.title)
+                        }
+                    }
+                }
+            }
+        } label: {
+            Label("Chats", systemImage: "bubble.left.and.bubble.right")
+                .font(.caption)
+        }
+        .menuStyle(.borderlessButton)
+        .help("Switch between saved chats or delete one.")
+        .accessibilityIdentifier("chatThreadMenu")
+    }
+
+    private var newChatButton: some View {
+        Button("New Chat", systemImage: "square.and.pencil") {
+            controller.newChat()
+        }
+        .labelStyle(.iconOnly)
+        .buttonStyle(.borderless)
+        .help("Start a new chat")
+        .accessibilityIdentifier("chatNewChatButton")
     }
 
     private var chatComposer: some View {

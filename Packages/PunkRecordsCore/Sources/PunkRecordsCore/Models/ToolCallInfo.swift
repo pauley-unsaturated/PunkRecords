@@ -5,7 +5,7 @@ import Foundation
 ///
 /// Pure data — the presentation helpers (icon, verb, argument summary) live in
 /// an App-layer extension so Core stays free of SF Symbol / UI-copy concerns.
-public struct ToolCallInfo: Sendable {
+public struct ToolCallInfo: Sendable, Codable, Equatable {
     public let name: String
     public let arguments: String   // raw JSON from the agent event
     public var output: String

@@ -42,6 +42,20 @@ final class ChatSessionController {
     /// usage capture reachable/testable.
     private(set) var lastTurnUsage: TokenUsage?
 
+    // MARK: - Threads
+
+    /// The conversation currently shown. `messages` mirrors its contents; the
+    /// thread is persisted after each turn. `nil` only before the first
+    /// ``loadInitialThread()``.
+    private(set) var activeThread: ChatThread?
+
+    /// Lightweight rows for the thread switcher, sorted newest-first. Refreshed
+    /// after every save/delete.
+    private(set) var threadSummaries: [ThreadSummary] = []
+
+    /// Resolved lazily from the open vault by ``loadInitialThread()``.
+    private var threadStore: FileSystemThreadStore?
+
     // MARK: - Composer input
 
     var prompt = ""
@@ -167,7 +181,7 @@ final class ChatSessionController {
             attachmentTranscript: attachmentTranscript
         )
         messages.append(userMessage)
-        persistTranscript()
+        await persistActiveThread()
         prompt = ""
         pendingAttachments = []
 
@@ -184,7 +198,7 @@ final class ChatSessionController {
 
         isStreaming = true
         await runTurn(agentPrompt, images: imageAttachments, context: context, turn: turn)
-        persistTranscript()
+        await persistActiveThread()
         isStreaming = false
     }
 
@@ -201,7 +215,7 @@ final class ChatSessionController {
         guard let repository = appState.repository,
               let searchIndex = appState.searchIndex else {
             messages.append(ChatMessage(role: .assistant, content: "Vault not loaded.", context: context))
-            persistTranscript()
+            await persistActiveThread()
             return
         }
 
@@ -271,28 +285,110 @@ final class ChatSessionController {
             lastTurnUsage = reducerState.lastUsage
         } catch {
             messages.append(ChatMessage(role: .assistant, content: "*Error: \(error.localizedDescription)*", context: context))
-            persistTranscript()
+            await persistActiveThread()
         }
     }
 
-    // MARK: - Transcript persistence
+    // MARK: - Thread lifecycle
 
-    func loadTranscript() {
-        guard messages.isEmpty, let vaultRoot = appState.currentVault?.rootURL else { return }
-        do {
-            messages = try ChatTranscriptStore.load(vaultRoot: vaultRoot)
-        } catch {
-            appState.errorMessage = "Failed to load chat transcript: \(error.localizedDescription)"
-        }
-    }
-
-    func persistTranscript() {
+    /// First-open setup for the panel: wire the store, migrate any legacy
+    /// transcript into a thread, load the switcher list, and activate the most
+    /// recent thread (or start a fresh empty one). Idempotent — safe to call from
+    /// `.task`, which may re-run on reappearance.
+    func loadInitialThread() async {
         guard let vaultRoot = appState.currentVault?.rootURL else { return }
+        let store = threadStore ?? FileSystemThreadStore(vaultRoot: vaultRoot)
+        threadStore = store
+
         do {
-            try ChatTranscriptStore.save(messages: messages, vaultRoot: vaultRoot)
+            try await store.migrateLegacyTranscriptIfNeeded()
         } catch {
-            appState.errorMessage = "Failed to save chat transcript: \(error.localizedDescription)"
+            appState.errorMessage = "Failed to migrate chat history: \(error.localizedDescription)"
         }
+
+        await refreshThreadSummaries()
+
+        // Already showing a thread (e.g. .task re-ran) — don't clobber it.
+        guard activeThread == nil else { return }
+
+        if let newest = threadSummaries.first,
+           let loaded = try? await store.load(id: newest.id) {
+            activate(loaded)
+        } else {
+            startFreshThread()
+        }
+    }
+
+    /// Start a new, empty conversation. The thread is held in memory and only
+    /// written to disk once it has content (see ``persistActiveThread()``), so
+    /// unused "New Chat" presses never clutter the switcher. Also serves as the
+    /// "clear" affordance.
+    func newChat() {
+        startFreshThread()
+    }
+
+    /// Switch to a stored thread, loading its messages into the transcript. A
+    /// no-op if the id can't be loaded. The previously-active thread is already
+    /// persisted (every turn saves), so nothing is lost — except an untouched
+    /// empty new thread, which is intentionally dropped.
+    func switchTo(threadID: UUID) async {
+        guard let store = threadStore else { return }
+        guard let loaded = try? await store.load(id: threadID) else { return }
+        activate(loaded)
+    }
+
+    /// Delete a thread. If it was the active one, fall back to the next most
+    /// recent thread, or a fresh empty one when none remain.
+    func deleteThread(id: UUID) async {
+        guard let store = threadStore else { return }
+        do {
+            try await store.delete(id: id)
+        } catch {
+            appState.errorMessage = "Failed to delete chat: \(error.localizedDescription)"
+            return
+        }
+        await refreshThreadSummaries()
+
+        guard activeThread?.id == id else { return }
+        if let newest = threadSummaries.first,
+           let loaded = try? await store.load(id: newest.id) {
+            activate(loaded)
+        } else {
+            startFreshThread()
+        }
+    }
+
+    /// Persist the active thread's current messages. Skips empty conversations so
+    /// a brand-new thread only lands on disk once it has content. Re-derives the
+    /// title and bumps `updatedAt`, then refreshes the switcher.
+    func persistActiveThread() async {
+        guard let store = threadStore, !messages.isEmpty else { return }
+        var thread = activeThread ?? ChatThread()
+        thread.update(messages: messages)
+        activeThread = thread
+        do {
+            try await store.save(thread)
+        } catch {
+            appState.errorMessage = "Failed to save chat: \(error.localizedDescription)"
+            return
+        }
+        await refreshThreadSummaries()
+    }
+
+    private func activate(_ thread: ChatThread) {
+        activeThread = thread
+        messages = thread.messages
+    }
+
+    private func startFreshThread() {
+        activeThread = ChatThread()
+        messages = []
+    }
+
+    private func refreshThreadSummaries() async {
+        guard let store = threadStore else { return }
+        let loaded = (try? await store.summaries()) ?? []
+        threadSummaries = ChatThreadHelpers.sortedSummaries(loaded)
     }
 
     // MARK: - Attachments

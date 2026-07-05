@@ -69,18 +69,28 @@ final class ChatTurnUITests: XCTestCase {
         XCTAssertTrue(testNoteRow.waitForExistence(timeout: 3),
                       "Test Note row should expose its file path")
         let testNotePath = try XCTUnwrap(testNoteRow.value as? String)
-        let transcript = URL(fileURLWithPath: testNotePath)
+        let threadsDir = URL(fileURLWithPath: testNotePath)
             .deletingLastPathComponent()
             .appendingPathComponent(".punkrecords", isDirectory: true)
-            .appendingPathComponent("chat-transcript.md")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: transcript.path),
-                      "Sending a chat turn should persist a transcript file")
+            .appendingPathComponent("threads", isDirectory: true)
 
-        let transcriptText = try String(contentsOf: transcript, encoding: .utf8)
-        XCTAssertTrue(transcriptText.contains("<!-- message: user -->"))
-        XCTAssertTrue(transcriptText.contains("What's in my vault?"))
-        XCTAssertTrue(transcriptText.contains("<!-- message: assistant -->"))
-        XCTAssertTrue(transcriptText.contains("Scripted response: vault search completed."))
+        // Sending a chat turn persists the active thread as a JSON file. The save
+        // runs in a Task after the turn, so poll briefly for the file to appear.
+        var threadFiles: [URL] = []
+        for _ in 0..<20 {
+            threadFiles = ((try? FileManager.default.contentsOfDirectory(
+                at: threadsDir, includingPropertiesForKeys: nil)) ?? [])
+                .filter { $0.pathExtension == "json" }
+            if !threadFiles.isEmpty { break }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        XCTAssertFalse(threadFiles.isEmpty,
+                       "Sending a chat turn should persist a thread JSON file")
+
+        let threadText = try String(contentsOf: threadFiles[0], encoding: .utf8)
+        XCTAssertTrue(threadText.contains("\"role\""))
+        XCTAssertTrue(threadText.contains("What's in my vault?"))
+        XCTAssertTrue(threadText.contains("Scripted response: vault search completed."))
     }
 
     // MARK: - Provider picker states

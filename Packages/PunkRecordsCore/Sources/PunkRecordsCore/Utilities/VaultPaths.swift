@@ -89,6 +89,39 @@ public enum VaultPaths {
         return UUID(uuidString: stem)
     }
 
+    // MARK: - Chat threads
+
+    /// Vault-relative directory holding persisted chat conversations — one JSON
+    /// file per ``ChatThread``, keyed by thread id. Lives under `.punkrecords/`,
+    /// which is hidden and already in the default `ignoredPaths`, so the FS
+    /// watcher and search indexer never mistake a thread file for a note.
+    public static var chatThreadsDirectory: RelativePath { ".punkrecords/threads" }
+
+    /// Vault-relative path of the JSON file backing a chat thread, keyed by its
+    /// stable `id` so the same thread maps to the same file across sessions.
+    public static func chatThreadPath(forThreadID id: UUID) -> RelativePath {
+        "\(chatThreadsDirectory)/\(id.uuidString).json"
+    }
+
+    /// Recover the thread id encoded in a thread filename, or nil if the filename
+    /// is not a `{uuid}.json` thread file (e.g. a stray in-flight `.tmp` write).
+    /// Callers use this to skip non-thread entries when scanning the directory.
+    public static func chatThreadID(fromThreadFilename filename: String) -> UUID? {
+        guard (filename as NSString).pathExtension.lowercased() == "json" else { return nil }
+        let stem = (filename as NSString).deletingPathExtension
+        return UUID(uuidString: stem)
+    }
+
+    /// Vault-relative path of the legacy single-transcript chat persistence
+    /// (`punkrecords-chat-transcript-v1`) the per-thread store migrates away from.
+    public static var legacyChatTranscriptPath: RelativePath { ".punkrecords/chat-transcript.md" }
+
+    /// Where the legacy transcript is renamed after a successful migration, so it
+    /// is retired (never re-migrated) without discarding the original content.
+    public static var legacyChatTranscriptRetiredPath: RelativePath {
+        ".punkrecords/chat-transcript.migrated.md"
+    }
+
     // MARK: - Web content cache
 
     /// Vault-relative directory where fetched web pages are cached as raw HTML
