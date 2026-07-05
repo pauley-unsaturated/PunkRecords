@@ -59,14 +59,15 @@ private struct ProvidersSettingsTab: View {
     private var ollamaBaseURL = ProviderRegistry.defaultOllamaBaseURL
     @AppStorage(ProviderRegistry.DefaultsKey.openAIBaseURL)
     private var openAIBaseURL = ProviderRegistry.defaultOpenAIBaseURL
+    // nil = list unavailable (server down / fetch failed) → manual entry.
+    @State private var installedOllamaModels: [String]?
+    @State private var manualOllamaEntry = false
     private let keychainService = KeychainService()
 
     var body: some View {
         Form {
             Section("Local — Ollama (on-device, no key)") {
-                TextField("Model", text: $ollamaModel)
-                    .help("Ollama model name. qwen3 has the most reliable tool calling; "
-                        + "gemma4 also works. Run `ollama pull <model>` first.")
+                ollamaModelRow
                 TextField("Server URL", text: $ollamaBaseURL)
                     .help("Default http://localhost:11434. Start the server with `ollama serve`.")
                 Text("The provider lights up in chat once the Ollama server is reachable.")
@@ -108,6 +109,55 @@ private struct ProvidersSettingsTab: View {
         }
         .formStyle(.grouped)
         .alert("Settings Saved", isPresented: $showSaveConfirmation) { }
+        .task(id: ollamaBaseURL) { await refreshOllamaModels() }
+    }
+
+    /// Model picker fed by the server's `/api/tags` list, with manual entry as
+    /// the fallback (server unreachable, or a model not pulled yet). Both paths
+    /// bind the same persisted value.
+    @ViewBuilder private var ollamaModelRow: some View {
+        if let installed = installedOllamaModels, !manualOllamaEntry {
+            Picker("Model", selection: $ollamaModel) {
+                ForEach(OllamaModelCatalog.pickerOptions(installed: installed, stored: ollamaModel),
+                        id: \.self) { name in
+                    Text(name).tag(name)
+                }
+            }
+            .help("Models installed on the Ollama server. qwen3 has the most "
+                + "reliable tool calling; gemma4 also works.")
+            HStack {
+                Button("Refresh") { Task { await refreshOllamaModels() } }
+                Button("Enter manually…") { manualOllamaEntry = true }
+            }
+            .buttonStyle(.link)
+            .font(.caption)
+        } else {
+            TextField("Model", text: $ollamaModel)
+                .help("Ollama model name. qwen3 has the most reliable tool calling; "
+                    + "gemma4 also works. Run `ollama pull <model>` first.")
+            HStack {
+                if installedOllamaModels == nil {
+                    Text("Couldn't list installed models — is the server running?")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Retry") { Task { await refreshOllamaModels() } }
+                } else {
+                    Button("Choose from installed models") { manualOllamaEntry = false }
+                }
+            }
+            .buttonStyle(.link)
+            .font(.caption)
+        }
+    }
+
+    private func refreshOllamaModels() async {
+        // Debounce: .task(id:) restarts per keystroke while the URL is edited.
+        try? await Task.sleep(for: .milliseconds(300))
+        guard !Task.isCancelled else { return }
+        let endpoint = ProviderRegistry.ollamaEndpoint(from: ollamaBaseURL)
+        let models = try? await OllamaModelListClient().installedModels(baseURL: endpoint)
+        guard !Task.isCancelled else { return }
+        installedOllamaModels = models
     }
 
     private func saveKeys() {
