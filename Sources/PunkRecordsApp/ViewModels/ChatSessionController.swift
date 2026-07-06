@@ -73,12 +73,12 @@ final class ChatSessionController {
     /// Loads its NaturalLanguage model lazily on first use.
     private let threadEmbedder: any ThreadEmbedder = NLThreadEmbedder()
 
-    /// Guards the one-time store wiring in ``loadInitialThread()``. Because the
-    /// controller is now shared, both the sidebar and the chat panel may call
-    /// `loadInitialThread()` concurrently on first open; this ensures only the
-    /// first caller wires the store + migrates (the store field is only set after
-    /// the awaits, so the flag — not `threadStore == nil` — is the real gate).
-    private var isInitialLoadInFlight = false
+    /// In-flight one-time store wiring (see ``ensureThreadStore()``). Because the
+    /// controller is shared, the sidebar, the chat panel, and any persist call may
+    /// race to wire the store on first use; concurrent callers await this task so
+    /// every entry point observes a wired store instead of skipping silently
+    /// (skipping is how PUNK-hdd lost a conversation).
+    private var storeWiringTask: Task<Void, Never>?
 
     // MARK: - Composer input
 
@@ -374,36 +374,8 @@ final class ChatSessionController {
     /// recent thread (or start a fresh empty one). Idempotent — safe to call from
     /// `.task`, which may re-run on reappearance.
     func loadInitialThread() async {
-        guard let vaultRoot = appState.currentVault?.rootURL else { return }
-
-        // Store already wired (the sidebar loaded first, or the panel is
-        // reopening on the shared controller) — just refresh the switcher list
-        // and keep whatever thread is active.
-        if threadStore != nil {
-            await refreshThreadSummaries()
-            return
-        }
-
-        // Only the first concurrent caller wires the store + migrates.
-        guard !isInitialLoadInFlight else { return }
-        isInitialLoadInFlight = true
-        defer { isInitialLoadInFlight = false }
-
-        // Migrate on the concrete file store (migration is file-store-specific),
-        // then wrap it in the embedding-indexing decorator used from here on.
-        let fileStore = FileSystemThreadStore(vaultRoot: vaultRoot)
-        do {
-            try await fileStore.migrateLegacyTranscriptIfNeeded()
-        } catch {
-            appState.errorMessage = "Failed to migrate chat history: \(error.localizedDescription)"
-        }
-        let indexed = EmbeddingIndexingThreadStore(
-            inner: fileStore,
-            embedder: threadEmbedder,
-            vaultRoot: vaultRoot
-        )
-        threadStore = indexed
-        threadVectorSource = indexed
+        await ensureThreadStore()
+        guard let store = threadStore else { return }
 
         await refreshThreadSummaries()
 
@@ -412,26 +384,64 @@ final class ChatSessionController {
         guard activeThread == nil else { return }
 
         if let newest = threadSummaries.first,
-           let loaded = try? await indexed.load(id: newest.id) {
+           let loaded = try? await store.load(id: newest.id) {
             activate(loaded)
         } else {
             startFreshThread()
         }
     }
 
-    /// Start a new, empty conversation. The thread is held in memory and only
-    /// written to disk once it has content (see ``persistActiveThread()``), so
-    /// unused "New Chat" presses never clutter the switcher. Also serves as the
-    /// "clear" affordance.
-    func newChat() {
+    /// Wire the thread store for the current vault if it isn't already. Every
+    /// thread-lifecycle entry point calls this, so a controller created after
+    /// the views' `.task`s already fired still wires itself before touching
+    /// disk instead of silently dropping saves (PUNK-hdd). Concurrent callers
+    /// await the same wiring task. A `nil` vault leaves the store unwired.
+    private func ensureThreadStore() async {
+        if threadStore != nil { return }
+        if let inFlight = storeWiringTask {
+            await inFlight.value
+            return
+        }
+        guard let vaultRoot = appState.currentVault?.rootURL else { return }
+
+        // Migrate on the concrete file store (migration is file-store-specific),
+        // then wrap it in the embedding-indexing decorator used from here on.
+        let wiring = Task { [threadEmbedder] in
+            let fileStore = FileSystemThreadStore(vaultRoot: vaultRoot)
+            do {
+                try await fileStore.migrateLegacyTranscriptIfNeeded()
+            } catch {
+                self.appState.errorMessage = "Failed to migrate chat history: \(error.localizedDescription)"
+            }
+            let indexed = EmbeddingIndexingThreadStore(
+                inner: fileStore,
+                embedder: threadEmbedder,
+                vaultRoot: vaultRoot
+            )
+            self.threadStore = indexed
+            self.threadVectorSource = indexed
+        }
+        storeWiringTask = wiring
+        await wiring.value
+        storeWiringTask = nil
+    }
+
+    /// Start a new, empty conversation, persisting the current one FIRST —
+    /// clearing must never destroy the only copy of a chat, even if an earlier
+    /// save was skipped or failed (PUNK-hdd). The fresh thread stays in memory
+    /// until it has content, so unused "New Chat" presses never clutter the
+    /// switcher. Also serves as the "clear" affordance.
+    func newChat() async {
+        await persistActiveThread()
         startFreshThread()
     }
 
     /// Switch to a stored thread, loading its messages into the transcript. A
-    /// no-op if the id can't be loaded. The previously-active thread is already
-    /// persisted (every turn saves), so nothing is lost — except an untouched
-    /// empty new thread, which is intentionally dropped.
+    /// no-op if the id can't be loaded. Persists the outgoing conversation
+    /// first (same defensive rule as ``newChat()``) so switching can never
+    /// discard unsaved messages.
     func switchTo(threadID: UUID) async {
+        await persistActiveThread()
         guard let store = threadStore else { return }
         guard let loaded = try? await store.load(id: threadID) else { return }
         activate(loaded)
@@ -440,6 +450,7 @@ final class ChatSessionController {
     /// Delete a thread. If it was the active one, fall back to the next most
     /// recent thread, or a fresh empty one when none remain.
     func deleteThread(id: UUID) async {
+        await ensureThreadStore()
         guard let store = threadStore else { return }
         do {
             try await store.delete(id: id)
@@ -468,6 +479,7 @@ final class ChatSessionController {
     /// streaming tail is captured, and so the branch matches exactly what the user
     /// sees on screen.
     func forkThread(at messageID: UUID) async {
+        await ensureThreadStore()
         guard let store = threadStore, let source = activeThread else { return }
         var forkSource = source
         forkSource.messages = messages
@@ -484,9 +496,16 @@ final class ChatSessionController {
 
     /// Persist the active thread's current messages. Skips empty conversations so
     /// a brand-new thread only lands on disk once it has content. Re-derives the
-    /// title and bumps `updatedAt`, then refreshes the switcher.
+    /// title and bumps `updatedAt`, then refreshes the switcher. Wires the store
+    /// on demand and surfaces a visible error rather than silently dropping a
+    /// conversation when no store can be reached (PUNK-hdd).
     func persistActiveThread() async {
-        guard let store = threadStore, !messages.isEmpty else { return }
+        guard !messages.isEmpty else { return }
+        await ensureThreadStore()
+        guard let store = threadStore else {
+            appState.errorMessage = "Chat could not be saved — no vault is open."
+            return
+        }
         var thread = activeThread ?? ChatThread()
         // Derive the focus note (most recent message with a resolvable note
         // context) against the current vault so the summary can show it without

@@ -72,7 +72,11 @@ struct LLMChatPanel: View {
             .padding(.horizontal)
             .padding(.vertical, 8)
             .background(providerKeyboardShortcuts)
-            .task {
+            // Keyed to the controller's identity: if AppState ever swaps in a new
+            // controller while the panel stays on screen (same-vault reopen), the
+            // task re-fires and wires the replacement's store instead of leaving
+            // it silently unwired (PUNK-hdd).
+            .task(id: ObjectIdentifier(controller)) {
                 await controller.loadInitialThread()
 
                 // Re-probe while the panel is open so a provider that comes online
@@ -240,7 +244,7 @@ struct LLMChatPanel: View {
 
     private var newChatButton: some View {
         Button("New Chat", systemImage: "square.and.pencil") {
-            controller.newChat()
+            Task { await controller.newChat() }
         }
         .labelStyle(.iconOnly)
         .buttonStyle(.borderless)

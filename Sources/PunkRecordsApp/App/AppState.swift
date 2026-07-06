@@ -109,12 +109,18 @@ final class AppState {
 
         let name = url.lastPathComponent
         let vault = Vault(name: name, rootURL: url)
+        let previousVaultRoot = currentVault?.rootURL
         self.currentVault = vault
 
         // The shared chat controller is created eagerly with the vault so both the
         // sidebar and the chat panel can reach the same thread state. Its store is
-        // still wired lazily (on first `loadInitialThread()`), so this is cheap.
-        self.chatController = ChatSessionController(appState: self)
+        // still wired lazily (on first `loadInitialThread()`/persist), so this is
+        // cheap. On a SAME-vault reopen, keep the existing controller: replacing
+        // it would discard wired store + active thread while the views' `.task`s
+        // (keyed on vault root) never re-fire to wire the replacement (PUNK-hdd).
+        if chatController == nil || previousVaultRoot != url {
+            self.chatController = ChatSessionController(appState: self)
+        }
 
         do {
             let repo = FileSystemDocumentRepository(
@@ -329,9 +335,9 @@ final class AppState {
     }
 
     /// Start a new empty chat from the sidebar's Chats header (+) and reveal the
-    /// panel.
+    /// panel. The controller persists the outgoing conversation before clearing.
     func startNewChatThread() {
-        chatController?.newChat()
+        Task { await chatController?.newChat() }
         isChatPanelVisible = true
     }
 
