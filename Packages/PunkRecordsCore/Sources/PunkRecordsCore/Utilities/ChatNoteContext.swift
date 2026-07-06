@@ -77,6 +77,35 @@ public enum ChatNoteContext {
         )
     }
 
+    /// The note a whole conversation is "about": the note referenced by the MOST
+    /// RECENT message that carries a resolvable note context. Scans `messages`
+    /// newest-first and returns the first message whose ``MessageContext`` names a
+    /// single note (`.document` / `.selection`) that `resolveDocument` can still
+    /// find in the current vault. Returns `nil` when no message has a note context
+    /// (all vault-wide) or none resolve — in which case the row shows only the
+    /// thread title.
+    ///
+    /// Pure Core: the caller supplies the document lookup (from the in-memory
+    /// vault or the repository), mirroring ``reference(for:document:)``.
+    public static func focusNote(
+        for messages: [ChatMessage],
+        resolveDocument: (DocumentID) -> Document?
+    ) -> Reference? {
+        for message in messages.reversed() {
+            guard let context = message.context,
+                  let noteID = referencedNoteID(
+                      scope: context.scope,
+                      currentDocumentID: context.currentDocumentID
+                  ),
+                  let document = resolveDocument(noteID),
+                  let ref = reference(for: context, document: document) else {
+                continue
+            }
+            return ref
+        }
+        return nil
+    }
+
     /// Instruction fragment naming the selected note for the LLM, or `""` when the
     /// scope is vault-wide / the note is unresolved. Additive to the session
     /// instructions so the model resolves deixis ("this note", "it") to the note

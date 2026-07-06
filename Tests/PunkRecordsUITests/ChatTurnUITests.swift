@@ -29,8 +29,10 @@ final class ChatTurnUITests: XCTestCase {
         XCTAssertTrue(chatButton.waitForExistence(timeout: 5),
                       "AI Chat toolbar button should appear after a doc is open")
         chatButton.click()
-        XCTAssertTrue(app.staticTexts["AI Chat"].waitForExistence(timeout: 3),
-                      "Chat panel should open")
+        // The header now shows the ACTIVE THREAD TITLE (PUNK-9ss), not a static
+        // "AI Chat" label, so confirm the panel opened via the composer field.
+        XCTAssertTrue(app.textFields["Ask about your vault..."].waitForExistence(timeout: 3),
+                      "Chat panel should open (composer visible)")
     }
 
     // MARK: - Full chat turn

@@ -251,4 +251,171 @@ struct ChatThreadTests {
         #expect(thread.updatedAt == before.addingTimeInterval(10))
         #expect(thread.summary.messageCount == 1)
     }
+
+    // MARK: - Focus note (schema + projection)
+
+    @Test("update() stores the focus note, and it projects into the summary")
+    func updateStoresFocusNote() {
+        var thread = ChatThread()
+        let focus = ThreadFocusNote(title: "DSP Filters", path: "dsp/filters.md")
+        thread.update(messages: [ChatMessage(role: .user, content: "about filters")], focusNote: focus)
+        #expect(thread.focusNote == focus)
+        #expect(thread.summary.focusNote == focus)
+    }
+
+    @Test("ChatThread round-trips its focus note through Codable")
+    func chatThreadFocusNoteRoundTrip() throws {
+        var thread = ChatThread(messages: [ChatMessage(role: .user, content: "hi")])
+        thread.update(
+            messages: thread.messages,
+            focusNote: ThreadFocusNote(title: "Actor Reentrancy", path: "swift/actor.md")
+        )
+        let decoded = try JSONDecoder().decode(ChatThread.self, from: JSONEncoder().encode(thread))
+        #expect(decoded == thread)
+        #expect(decoded.focusNote == ThreadFocusNote(title: "Actor Reentrancy", path: "swift/actor.md"))
+    }
+
+    @Test("A thread JSON without a focusNote key decodes leniently to nil")
+    func chatThreadFocusNoteLenientDecode() throws {
+        let id = UUID()
+        let json = """
+        {
+          "id": "\(id.uuidString)",
+          "title": "legacy",
+          "createdAt": 0,
+          "updatedAt": 0,
+          "messages": []
+        }
+        """
+        let decoded = try JSONDecoder().decode(ChatThread.self, from: Data(json.utf8))
+        #expect(decoded.focusNote == nil)
+        #expect(decoded.summary.focusNote == nil)
+    }
+
+    // MARK: - ThreadSummary lenient decode
+
+    @Test("ThreadSummary decodes with the new parentThreadID / focusNote fields present")
+    func threadSummaryDecodesWithNewFields() throws {
+        let id = UUID()
+        let parent = UUID()
+        let json = """
+        {
+          "id": "\(id.uuidString)",
+          "title": "child",
+          "updatedAt": 12,
+          "messageCount": 3,
+          "parentThreadID": "\(parent.uuidString)",
+          "focusNote": { "title": "Note X", "path": "x.md" }
+        }
+        """
+        let decoded = try JSONDecoder().decode(ThreadSummary.self, from: Data(json.utf8))
+        #expect(decoded.parentThreadID == parent)
+        #expect(decoded.hasParent)
+        #expect(decoded.focusNote == ThreadFocusNote(title: "Note X", path: "x.md"))
+    }
+
+    @Test("ThreadSummary decodes leniently when parentThreadID / focusNote are absent")
+    func threadSummaryDecodesWithoutNewFields() throws {
+        let id = UUID()
+        let json = """
+        {
+          "id": "\(id.uuidString)",
+          "title": "root",
+          "updatedAt": 7,
+          "messageCount": 1
+        }
+        """
+        let decoded = try JSONDecoder().decode(ThreadSummary.self, from: Data(json.utf8))
+        #expect(decoded.parentThreadID == nil)
+        #expect(!decoded.hasParent)
+        #expect(decoded.focusNote == nil)
+    }
+
+    // MARK: - Thread tree assembly
+
+    private func summaryRow(
+        _ id: UUID,
+        parent: UUID? = nil,
+        updated: TimeInterval,
+        title: String = "t"
+    ) -> ThreadSummary {
+        ThreadSummary(
+            id: id,
+            title: title,
+            updatedAt: Date(timeIntervalSince1970: updated),
+            messageCount: 1,
+            parentThreadID: parent
+        )
+    }
+
+    @Test("Thread tree nests forked children under their parent")
+    func threadTreeNests() {
+        let parentID = UUID()
+        let childID = UUID()
+        let parent = summaryRow(parentID, updated: 100, title: "parent")
+        let child = summaryRow(childID, parent: parentID, updated: 200, title: "child")
+        // Input order shouldn't matter — child listed first.
+        let tree = ChatThreadHelpers.threadTree(from: [child, parent])
+        #expect(tree.count == 1)
+        #expect(tree[0].summary.id == parentID)
+        #expect(tree[0].children.map(\.summary.id) == [childID])
+        #expect(tree[0].children[0].children.isEmpty)
+    }
+
+    @Test("An orphaned parent reference surfaces the child as a flat top-level row")
+    func threadTreeOrphan() {
+        let childID = UUID()
+        let child = summaryRow(childID, parent: UUID(), updated: 100) // parent not in the set
+        let tree = ChatThreadHelpers.threadTree(from: [child])
+        #expect(tree.map(\.summary.id) == [childID])
+        #expect(tree[0].children.isEmpty)
+    }
+
+    @Test("A self-parent thread is a flat top-level row, not its own child")
+    func threadTreeSelfParent() {
+        let id = UUID()
+        let selfParented = summaryRow(id, parent: id, updated: 100)
+        let tree = ChatThreadHelpers.threadTree(from: [selfParented])
+        #expect(tree.map(\.summary.id) == [id])
+        #expect(tree[0].children.isEmpty)
+    }
+
+    @Test("Thread tree sorts newest-first within each level")
+    func threadTreeSortsNewestFirstPerLevel() {
+        let parentID = UUID()
+        let parent = summaryRow(parentID, updated: 50, title: "p")
+        let older = summaryRow(UUID(), parent: parentID, updated: 100, title: "older")
+        let newer = summaryRow(UUID(), parent: parentID, updated: 300, title: "newer")
+        let rootB = summaryRow(UUID(), updated: 500, title: "rootB")
+        let tree = ChatThreadHelpers.threadTree(from: [parent, older, newer, rootB])
+        // Roots newest-first: rootB (500) before p (50).
+        #expect(tree.map(\.summary.title) == ["rootB", "p"])
+        // Children newest-first.
+        #expect(tree[1].children.map(\.summary.title) == ["newer", "older"])
+    }
+
+    @Test("Thread tree surfaces every summary exactly once even under a pure cycle")
+    func threadTreeCycleSafe() {
+        let a = UUID()
+        let b = UUID()
+        let sa = summaryRow(a, parent: b, updated: 100, title: "a")
+        let sb = summaryRow(b, parent: a, updated: 200, title: "b")
+        let tree = ChatThreadHelpers.threadTree(from: [sa, sb])
+
+        var ids: [UUID] = []
+        func walk(_ nodes: [ChatThreadHelpers.ThreadTreeNode]) {
+            for node in nodes {
+                ids.append(node.summary.id)
+                walk(node.children)
+            }
+        }
+        walk(tree)
+        #expect(ids.count == 2)
+        #expect(Set(ids) == [a, b])
+    }
+
+    @Test("Empty input yields an empty tree")
+    func threadTreeEmpty() {
+        #expect(ChatThreadHelpers.threadTree(from: []).isEmpty)
+    }
 }

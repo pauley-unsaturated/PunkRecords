@@ -41,9 +41,9 @@ struct VaultWindow: View {
                     )
                 }
 
-                if appState.isChatPanelVisible {
+                if appState.isChatPanelVisible, let controller = appState.chatController {
                     Divider()
-                    LLMChatPanel(appState: appState)
+                    LLMChatPanel(controller: controller)
                         .accessibilityIdentifier("chatPanel")
                 }
             }

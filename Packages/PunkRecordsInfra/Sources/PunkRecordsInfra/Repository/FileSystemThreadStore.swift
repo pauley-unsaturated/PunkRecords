@@ -165,13 +165,15 @@ public actor FileSystemThreadStore: ThreadStore {
 
     /// Decodes just the fields the switcher needs. `messages` is decoded into a
     /// count-only probe so bodies are never materialized (see `MessageCountProbe`).
-    /// `parentThreadID` is decoded (leniently — absent in unforked threads) purely
-    /// to flag forked rows in the summary.
+    /// `parentThreadID` (branch nesting) and `focusNote` (row subtitle) are decoded
+    /// leniently — both are absent in older / vault-wide threads — so the summary
+    /// carries them without loading full bodies.
     private struct ThreadFileHeader: Decodable {
         let id: UUID
         let title: String
         let updatedAt: Date
         let parentThreadID: UUID?
+        let focusNote: ThreadFocusNote?
         let messages: [MessageCountProbe]
 
         var summary: ThreadSummary {
@@ -180,7 +182,8 @@ public actor FileSystemThreadStore: ThreadStore {
                 title: title,
                 updatedAt: updatedAt,
                 messageCount: messages.count,
-                hasParent: parentThreadID != nil
+                parentThreadID: parentThreadID,
+                focusNote: focusNote
             )
         }
     }

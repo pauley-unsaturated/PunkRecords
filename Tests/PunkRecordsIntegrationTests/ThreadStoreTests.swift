@@ -178,6 +178,113 @@ struct ThreadStoreTests {
         #expect(forkSummary.hasParent)
     }
 
+    // MARK: - Focus note (PUNK-9ss)
+
+    @Test("Save then load preserves a thread's focus note")
+    func focusNoteRoundTrip() async throws {
+        let (vault, cleanup) = try factory.createTempVault()
+        defer { cleanup() }
+        let store = FileSystemThreadStore(vaultRoot: vault.rootURL)
+
+        var thread = ChatThread()
+        thread.update(
+            messages: [ChatMessage(role: .user, content: "about filters")],
+            focusNote: ThreadFocusNote(title: "DSP Filters", path: "dsp/filters.md")
+        )
+        try await store.save(thread)
+
+        let loaded = try #require(try await store.load(id: thread.id))
+        #expect(loaded.focusNote == ThreadFocusNote(title: "DSP Filters", path: "dsp/filters.md"))
+    }
+
+    @Test("Summaries expose the focus note without materializing message bodies")
+    func summariesExposeFocusNote() async throws {
+        let (vault, cleanup) = try factory.createTempVault()
+        defer { cleanup() }
+        let store = FileSystemThreadStore(vaultRoot: vault.rootURL)
+
+        var thread = ChatThread()
+        thread.update(
+            messages: [
+                ChatMessage(role: .user, content: "a long body that summaries must not load"),
+                ChatMessage(role: .assistant, content: "another long body"),
+            ],
+            focusNote: ThreadFocusNote(title: "Actor Reentrancy", path: "swift/actor.md")
+        )
+        try await store.save(thread)
+
+        let summaries = try await store.summaries()
+        let summary = try #require(summaries.first { $0.id == thread.id })
+        #expect(summary.focusNote == ThreadFocusNote(title: "Actor Reentrancy", path: "swift/actor.md"))
+        #expect(summary.messageCount == 2)
+    }
+
+    @Test("A thread with no note context saves and loads a nil focus note")
+    func focusNoteNilRoundTrip() async throws {
+        let (vault, cleanup) = try factory.createTempVault()
+        defer { cleanup() }
+        let store = FileSystemThreadStore(vaultRoot: vault.rootURL)
+
+        let thread = sampleThread() // update() with no focusNote ⇒ nil
+        try await store.save(thread)
+        let loaded = try #require(try await store.load(id: thread.id))
+        #expect(loaded.focusNote == nil)
+        let summary = try #require(try await store.summaries().first { $0.id == thread.id })
+        #expect(summary.focusNote == nil)
+    }
+
+    // MARK: - Backward compatibility (old-format thread files)
+
+    @Test("An old-format thread file (no schemaVersion / parentThreadID / focusNote) still loads and lists")
+    func oldFormatThreadFileLoads() async throws {
+        let (vault, cleanup) = try factory.createTempVault()
+        defer { cleanup() }
+        let store = FileSystemThreadStore(vaultRoot: vault.rootURL)
+
+        // Hand-write a thread file in the pre-PUNK-9ss shape: no schemaVersion,
+        // no parentThreadID, no focusNote — one message with the legacy field set.
+        let threadID = UUID()
+        let messageID = UUID()
+        let json = """
+        {
+          "id": "\(threadID.uuidString)",
+          "title": "legacy thread",
+          "createdAt": 0,
+          "updatedAt": 5,
+          "messages": [
+            {
+              "id": "\(messageID.uuidString)",
+              "role": "user",
+              "content": "legacy question",
+              "attachments": [],
+              "attachmentTranscript": "",
+              "timestamp": 0
+            }
+          ]
+        }
+        """
+        let dir = vault.rootURL.appendingPathComponent(VaultPaths.chatThreadsDirectory)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fileURL = vault.rootURL.appendingPathComponent(VaultPaths.chatThreadPath(forThreadID: threadID))
+        try Data(json.utf8).write(to: fileURL)
+
+        // It lists (header-only decode) with the new fields defaulting to nil.
+        let summary = try #require(try await store.summaries().first { $0.id == threadID })
+        #expect(summary.title == "legacy thread")
+        #expect(summary.messageCount == 1)
+        #expect(summary.parentThreadID == nil)
+        #expect(!summary.hasParent)
+        #expect(summary.focusNote == nil)
+
+        // And it loads fully, defaulting schemaVersion + focusNote leniently.
+        let loaded = try #require(try await store.load(id: threadID))
+        #expect(loaded.schemaVersion == ChatThread.currentSchemaVersion)
+        #expect(loaded.focusNote == nil)
+        #expect(loaded.parentThreadID == nil)
+        #expect(loaded.messages.map(\.content) == ["legacy question"])
+        #expect(loaded.messages[0].id == messageID)
+    }
+
     // MARK: - Migration
 
     @Test("Migrates a legacy transcript into a thread and retires the legacy file")

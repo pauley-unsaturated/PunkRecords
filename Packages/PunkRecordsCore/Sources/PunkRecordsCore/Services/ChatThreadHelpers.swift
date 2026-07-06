@@ -88,6 +88,69 @@ public enum ChatThreadHelpers {
         }
     }
 
+    // MARK: - Sidebar thread tree
+
+    /// A node in the sidebar's thread tree: a thread summary plus its forked
+    /// children (each itself a node). Children are the threads whose
+    /// ``ThreadSummary/parentThreadID`` points at this node's thread.
+    public struct ThreadTreeNode: Identifiable, Equatable, Sendable {
+        public let summary: ThreadSummary
+        public let children: [ThreadTreeNode]
+        public var id: UUID { summary.id }
+
+        public init(summary: ThreadSummary, children: [ThreadTreeNode] = []) {
+            self.summary = summary
+            self.children = children
+        }
+    }
+
+    /// Assemble a parent → children tree from flat ``ThreadSummary`` rows for the
+    /// sidebar's Chats section. A thread nests under its ``parentThreadID`` when
+    /// that parent is also present; otherwise it is a top-level row. Every summary
+    /// appears EXACTLY ONCE:
+    /// - **Orphaned parent** (parent id not in the set) ⇒ the child surfaces as a
+    ///   flat top-level row.
+    /// - **Self-parent / cycles** ⇒ broken safely: a node never becomes its own
+    ///   ancestor, and any summary trapped in a pure cycle (never reachable from a
+    ///   root) is surfaced as a flat top-level row rather than dropped.
+    ///
+    /// Rows are sorted newest-first within each level via ``sortedSummaries(_:)``.
+    public static func threadTree(from summaries: [ThreadSummary]) -> [ThreadTreeNode] {
+        let byID = Dictionary(summaries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+        var childrenByParent: [UUID: [ThreadSummary]] = [:]
+        var rootCandidates: [ThreadSummary] = []
+        for summary in summaries {
+            if let parentID = summary.parentThreadID,
+               parentID != summary.id,
+               byID[parentID] != nil {
+                childrenByParent[parentID, default: []].append(summary)
+            } else {
+                // No parent, an orphaned parent reference, or a self-parent.
+                rootCandidates.append(summary)
+            }
+        }
+
+        var emitted = Set<UUID>()
+        func build(_ summary: ThreadSummary) -> ThreadTreeNode {
+            emitted.insert(summary.id)
+            let kids = (childrenByParent[summary.id] ?? []).filter { !emitted.contains($0.id) }
+            return ThreadTreeNode(summary: summary, children: sortedSummaries(kids).map(build))
+        }
+
+        var roots = sortedSummaries(rootCandidates).map(build)
+
+        // Any summary trapped in a pure cycle (A→B→A, so neither is a root) was
+        // never emitted; surface such threads as flat top-level rows so nothing
+        // vanishes. Re-check `emitted` per iteration: building one cycle member
+        // emits the rest, which must then be skipped (never double-listed).
+        let leftover = summaries.filter { !emitted.contains($0.id) }
+        for summary in sortedSummaries(leftover) where !emitted.contains(summary.id) {
+            roots.append(build(summary))
+        }
+        return roots
+    }
+
     /// Whether the legacy single-transcript persistence should be converted into
     /// a thread on first open. Migrate exactly once: only when there is legacy
     /// content AND no threads exist yet, so a user who has already migrated (or

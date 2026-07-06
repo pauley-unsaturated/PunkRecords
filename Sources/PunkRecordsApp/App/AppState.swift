@@ -70,6 +70,14 @@ final class AppState {
     private(set) var recoveryStore: FileSystemCrashRecoveryStore?
     private(set) var keychainService = KeychainService()
 
+    /// The single shared chat controller for this vault (PUNK-9ss). Owned here
+    /// (rather than by `LLMChatPanel`) so the sidebar Chats section and the chat
+    /// panel read ONE source of truth — the same thread store, migration, active
+    /// thread, and summaries — instead of each spinning up its own. Created when
+    /// the vault opens; `nil` before then. Selecting a thread from the sidebar
+    /// drives it (`switchTo` + reveal the panel).
+    private(set) var chatController: ChatSessionController?
+
     /// Crash-recovery sidecars discovered on open that hold unsaved work the
     /// user should be prompted to recover or discard. Drives the recovery sheet
     /// in `VaultWindow`. Empty when the vault opened cleanly. Classification is
@@ -102,6 +110,11 @@ final class AppState {
         let name = url.lastPathComponent
         let vault = Vault(name: name, rootURL: url)
         self.currentVault = vault
+
+        // The shared chat controller is created eagerly with the vault so both the
+        // sidebar and the chat panel can reach the same thread state. Its store is
+        // still wired lazily (on first `loadInitialThread()`), so this is cheap.
+        self.chatController = ChatSessionController(appState: self)
 
         do {
             let repo = FileSystemDocumentRepository(
@@ -297,6 +310,34 @@ final class AppState {
         if let index = searchIndex {
             try? await index.removeFromIndex(documentID: doc.id)
         }
+    }
+
+    // MARK: - Chat threads (sidebar)
+
+    /// Ensure the shared chat controller's store is wired and its summaries
+    /// loaded, so the sidebar Chats section populates even before the chat panel
+    /// is ever opened. Idempotent (the controller guards re-entry / re-wiring).
+    func loadChatThreadsIfNeeded() async {
+        await chatController?.loadInitialThread()
+    }
+
+    /// Open a saved thread from the sidebar: activate it on the shared controller
+    /// and reveal the chat panel.
+    func openChatThread(id: UUID) async {
+        await chatController?.switchTo(threadID: id)
+        isChatPanelVisible = true
+    }
+
+    /// Start a new empty chat from the sidebar's Chats header (+) and reveal the
+    /// panel.
+    func startNewChatThread() {
+        chatController?.newChat()
+        isChatPanelVisible = true
+    }
+
+    /// Delete a saved thread from the sidebar's row context menu.
+    func deleteChatThread(id: UUID) async {
+        await chatController?.deleteThread(id: id)
     }
 
     // MARK: - Crash Recovery

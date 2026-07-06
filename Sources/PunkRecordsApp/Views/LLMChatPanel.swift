@@ -8,15 +8,16 @@ import PunkRecordsInfra
 /// transcript persistence, and error state — lives in ``ChatSessionController``.
 struct LLMChatPanel: View {
     @Environment(AppState.self) private var appState
-    @State private var controller: ChatSessionController
+    /// The shared controller, owned by ``AppState`` (PUNK-9ss) so the sidebar
+    /// Chats section and this panel see one source of truth. Passed in rather
+    /// than created here; a plain `let` still observes its `@Observable` state.
+    let controller: ChatSessionController
     @State private var scope: QueryScope = .global
-    @State private var threadPendingDeletion: ThreadSummary?
-    @State private var isShowingDeleteConfirmation = false
     @AppStorage(ProviderRegistry.DefaultsKey.chatProvider)
     private var chatProviderRaw: String = ProviderRegistry.chatProviderDefault.rawValue
 
-    init(appState: AppState) {
-        _controller = State(initialValue: ChatSessionController(appState: appState))
+    init(controller: ChatSessionController) {
+        self.controller = controller
     }
 
     private var selectedProviderID: LLMProviderID {
@@ -50,9 +51,8 @@ struct LLMChatPanel: View {
 
         return VStack(spacing: 0) {
             // Header
-            HStack {
-                Text("AI Chat")
-                    .font(.headline)
+            HStack(alignment: .firstTextBaseline) {
+                threadHeaderTitle
                 Spacer()
                 providerPicker
                 scopePicker
@@ -61,7 +61,7 @@ struct LLMChatPanel: View {
                         .controlSize(.small)
                         .accessibilityIdentifier("chatSummarizingIndicator")
                 }
-                threadMenu
+                actionsMenu
                 newChatButton
                 Button("Close", systemImage: "xmark.circle.fill") {
                     appState.isChatPanelVisible = false
@@ -165,14 +165,6 @@ struct LLMChatPanel: View {
         } message: {
             Text("Apple does not support image attachments. Switch to Claude or GPT to send images.")
         }
-        .alert("Delete this chat?", isPresented: $isShowingDeleteConfirmation, presenting: threadPendingDeletion) { summary in
-            Button("Delete", role: .destructive) {
-                Task { await controller.deleteThread(id: summary.id) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { summary in
-            Text("“\(summary.title)” will be permanently deleted. This can't be undone.")
-        }
         .sheet(isPresented: $controller.isShowingSummarySaveSheet) {
             SummarySaveSheet(controller: controller)
         }
@@ -185,11 +177,50 @@ struct LLMChatPanel: View {
         }
     }
 
-    /// Thread switcher: lists saved conversations (newest first, current checked)
-    /// and a submenu to delete one. Kept out of the `chatProviderPicker` /
-    /// `chatPanel`-identified menu set so the provider picker stays the first
-    /// menu button `ChatTurnUITests` reaches for.
-    private var threadMenu: some View {
+    /// Header identity for the ACTIVE conversation: its title, with a tappable
+    /// focus-note chip beneath naming the note the chat is about (PUNK-9ss). The
+    /// chip opens that note via the same selection-driven navigation the
+    /// per-message chips use. Distinct from the composer banner, which reflects
+    /// the NEXT turn's scope rather than what the conversation has been about.
+    private var threadHeaderTitle: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(controller.activeThread?.title ?? ChatThreadHelpers.defaultTitle)
+                .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .accessibilityIdentifier("chatThreadTitle")
+            focusNoteChip
+        }
+    }
+
+    /// Tappable "doc.text <note title>" chip for the active thread's focus note.
+    /// Shown whenever the active thread has a focus note; hidden otherwise.
+    @ViewBuilder
+    private var focusNoteChip: some View {
+        if let focus = controller.activeThread?.focusNote {
+            Button {
+                controller.openNote(path: focus.path)
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "doc.text")
+                    Text(focus.title)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .font(.caption)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Open “\(focus.title)” — the note this conversation is about")
+            .accessibilityIdentifier("chatThreadFocusNote")
+        }
+    }
+
+    /// Header actions menu, trimmed to actions on the ACTIVE conversation now that
+    /// the thread list + delete live in the sidebar Chats section. "Summarize to
+    /// Note" stays. Positioned AFTER the provider picker so the provider picker
+    /// remains the first menu button `ChatTurnUITests` reaches for.
+    private var actionsMenu: some View {
         Menu {
             Button {
                 controller.summarizeToNote(turnParameters)
@@ -198,46 +229,13 @@ struct LLMChatPanel: View {
             }
             .disabled(!controller.canSummarize)
             .accessibilityIdentifier("chatSummarizeToNote")
-
-            Divider()
-
-            ForEach(controller.threadSummaries) { summary in
-                Button {
-                    Task { await controller.switchTo(threadID: summary.id) }
-                } label: {
-                    HStack {
-                        if summary.id == controller.activeThread?.id {
-                            Image(systemName: "checkmark")
-                        }
-                        // Flag forked conversations with a branch glyph.
-                        if summary.hasParent {
-                            Image(systemName: "arrow.triangle.branch")
-                        }
-                        Text(summary.title)
-                    }
-                }
-            }
-
-            if !controller.threadSummaries.isEmpty {
-                Divider()
-                Menu("Delete Chat") {
-                    ForEach(controller.threadSummaries) { summary in
-                        Button(role: .destructive) {
-                            threadPendingDeletion = summary
-                            isShowingDeleteConfirmation = true
-                        } label: {
-                            Text(summary.title)
-                        }
-                    }
-                }
-            }
         } label: {
-            Label("Chats", systemImage: "bubble.left.and.bubble.right")
+            Label("Actions", systemImage: "ellipsis.circle")
                 .font(.caption)
         }
         .menuStyle(.borderlessButton)
-        .help("Switch between saved chats or delete one.")
-        .accessibilityIdentifier("chatThreadMenu")
+        .help("Actions for this conversation")
+        .accessibilityIdentifier("chatActionsMenu")
     }
 
     private var newChatButton: some View {
@@ -423,13 +421,15 @@ struct LLMChatPanel: View {
 }
 
 #Preview("Chat Panel — With Messages") {
-    LLMChatPanel(appState: PreviewData.makePreviewAppState())
-        .environment(PreviewData.makePreviewAppState())
+    let state = PreviewData.makePreviewAppState()
+    LLMChatPanel(controller: ChatSessionController(appState: state))
+        .environment(state)
         .frame(width: 350, height: 600)
 }
 
 #Preview("Chat Panel — Empty") {
-    LLMChatPanel(appState: PreviewData.makePreviewAppState())
-        .environment(PreviewData.makePreviewAppState())
+    let state = PreviewData.makePreviewAppState()
+    LLMChatPanel(controller: ChatSessionController(appState: state))
+        .environment(state)
         .frame(width: 350, height: 600)
 }

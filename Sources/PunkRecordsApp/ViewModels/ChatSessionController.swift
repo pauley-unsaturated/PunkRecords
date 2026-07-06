@@ -32,7 +32,12 @@ final class ChatSessionController {
     /// the same surface `LLMChatPanel` used to reach for directly. Internal (not
     /// `private`) so same-controller extensions in sibling files (e.g. the
     /// summarize-to-note flow) can reach the same dependencies.
-    let appState: AppState
+    ///
+    /// `unowned`: since PUNK-9ss `AppState` OWNS this controller (single source of
+    /// truth shared by the chat panel and the sidebar Chats section), so a strong
+    /// back-reference would form a retain cycle. The controller never outlives its
+    /// owning `AppState` (both die with the vault window), so `unowned` is safe.
+    unowned let appState: AppState
 
     // MARK: - Transcript & streaming
 
@@ -67,6 +72,13 @@ final class ChatSessionController {
     /// On-device embedder for `read_thread` query vectors and per-thread indexing.
     /// Loads its NaturalLanguage model lazily on first use.
     private let threadEmbedder: any ThreadEmbedder = NLThreadEmbedder()
+
+    /// Guards the one-time store wiring in ``loadInitialThread()``. Because the
+    /// controller is now shared, both the sidebar and the chat panel may call
+    /// `loadInitialThread()` concurrently on first open; this ensures only the
+    /// first caller wires the store + migrates (the store field is only set after
+    /// the awaits, so the flag — not `threadStore == nil` — is the real gate).
+    private var isInitialLoadInFlight = false
 
     // MARK: - Composer input
 
@@ -364,32 +376,43 @@ final class ChatSessionController {
     func loadInitialThread() async {
         guard let vaultRoot = appState.currentVault?.rootURL else { return }
 
-        if threadStore == nil {
-            // Migrate on the concrete file store (migration is file-store-specific),
-            // then wrap it in the embedding-indexing decorator used from here on.
-            let fileStore = FileSystemThreadStore(vaultRoot: vaultRoot)
-            do {
-                try await fileStore.migrateLegacyTranscriptIfNeeded()
-            } catch {
-                appState.errorMessage = "Failed to migrate chat history: \(error.localizedDescription)"
-            }
-            let indexed = EmbeddingIndexingThreadStore(
-                inner: fileStore,
-                embedder: threadEmbedder,
-                vaultRoot: vaultRoot
-            )
-            threadStore = indexed
-            threadVectorSource = indexed
+        // Store already wired (the sidebar loaded first, or the panel is
+        // reopening on the shared controller) — just refresh the switcher list
+        // and keep whatever thread is active.
+        if threadStore != nil {
+            await refreshThreadSummaries()
+            return
         }
+
+        // Only the first concurrent caller wires the store + migrates.
+        guard !isInitialLoadInFlight else { return }
+        isInitialLoadInFlight = true
+        defer { isInitialLoadInFlight = false }
+
+        // Migrate on the concrete file store (migration is file-store-specific),
+        // then wrap it in the embedding-indexing decorator used from here on.
+        let fileStore = FileSystemThreadStore(vaultRoot: vaultRoot)
+        do {
+            try await fileStore.migrateLegacyTranscriptIfNeeded()
+        } catch {
+            appState.errorMessage = "Failed to migrate chat history: \(error.localizedDescription)"
+        }
+        let indexed = EmbeddingIndexingThreadStore(
+            inner: fileStore,
+            embedder: threadEmbedder,
+            vaultRoot: vaultRoot
+        )
+        threadStore = indexed
+        threadVectorSource = indexed
 
         await refreshThreadSummaries()
 
-        // Already showing a thread (e.g. .task re-ran) — don't clobber it.
+        // Already showing a thread (e.g. the sidebar activated one first) — don't
+        // clobber it.
         guard activeThread == nil else { return }
 
-        if let store = threadStore,
-           let newest = threadSummaries.first,
-           let loaded = try? await store.load(id: newest.id) {
+        if let newest = threadSummaries.first,
+           let loaded = try? await indexed.load(id: newest.id) {
             activate(loaded)
         } else {
             startFreshThread()
@@ -465,7 +488,13 @@ final class ChatSessionController {
     func persistActiveThread() async {
         guard let store = threadStore, !messages.isEmpty else { return }
         var thread = activeThread ?? ChatThread()
-        thread.update(messages: messages)
+        // Derive the focus note (most recent message with a resolvable note
+        // context) against the current vault so the summary can show it without
+        // loading bodies. Pure decision in ``ChatNoteContext``; we supply the
+        // in-memory document lookup.
+        let focus = focusNoteReference(for: messages)
+            .map { ThreadFocusNote(title: $0.title, path: $0.path) }
+        thread.update(messages: messages, focusNote: focus)
         activeThread = thread
         do {
             try await store.save(thread)
@@ -574,6 +603,16 @@ final class ChatSessionController {
             currentDocumentID: currentDocumentID,
             document: resolveDocument(id: noteID)
         )
+    }
+
+    /// The note the whole conversation is about — the most recent message with a
+    /// resolvable note context — for the panel header chip and the persisted
+    /// ``ThreadFocusNote``. Pure decision in ``ChatNoteContext``; the controller
+    /// only supplies the vault lookup. `nil` for all-vault-wide conversations.
+    func focusNoteReference(for messages: [ChatMessage]) -> ChatNoteContext.Reference? {
+        ChatNoteContext.focusNote(for: messages) { [self] id in
+            resolveDocument(id: id)
+        }
     }
 
     /// Navigate the vault to `path`, reusing the same selection-driven navigation

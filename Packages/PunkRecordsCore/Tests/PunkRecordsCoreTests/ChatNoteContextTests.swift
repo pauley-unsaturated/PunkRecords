@@ -91,6 +91,79 @@ struct ChatNoteContextTests {
         #expect(ChatNoteContext.reference(for: nil, document: doc) == nil)
     }
 
+    // MARK: - focusNote (conversation-level)
+
+    private func context(_ scope: QueryScope, current: DocumentID?) -> MessageContext {
+        MessageContext(
+            scope: scope,
+            scopeLabel: "label",
+            currentDocumentID: current,
+            selection: nil,
+            variantID: "terse-v1",
+            userPrompt: "prompt"
+        )
+    }
+
+    @Test("Focus note is the most recent message with a resolvable note context")
+    func focusNoteLatestContextWins() {
+        let docA = makeDocument(id: DocumentID(), title: "Note A", path: "a.md")
+        let docB = makeDocument(id: DocumentID(), title: "Note B", path: "b.md")
+        let messages = [
+            ChatMessage(role: .user, content: "about A", context: context(.document(docA.id), current: docA.id)),
+            ChatMessage(role: .assistant, content: "reply A"),
+            ChatMessage(role: .user, content: "about B", context: context(.document(docB.id), current: docB.id)),
+            ChatMessage(role: .assistant, content: "reply B", context: context(.document(docB.id), current: docB.id)),
+        ]
+        let resolver: (DocumentID) -> Document? = { id in
+            [docA.id: docA, docB.id: docB][id]
+        }
+        #expect(ChatNoteContext.focusNote(for: messages, resolveDocument: resolver)
+            == ChatNoteContext.Reference(title: "Note B", path: "b.md"))
+    }
+
+    @Test("Focus note is nil when no message carries a note context (all vault-wide)")
+    func focusNoteNilWithoutContext() {
+        let messages = [
+            ChatMessage(role: .user, content: "hi", context: context(.global, current: nil)),
+            ChatMessage(role: .assistant, content: "hello"),
+        ]
+        #expect(ChatNoteContext.focusNote(for: messages) { _ in nil } == nil)
+    }
+
+    @Test("Focus note skips an unresolvable latest note, falling back to an older resolvable one")
+    func focusNoteSkipsUnresolvable() {
+        let docA = makeDocument(id: DocumentID(), title: "Note A", path: "a.md")
+        let deletedID = DocumentID()
+        let messages = [
+            ChatMessage(role: .user, content: "about A", context: context(.document(docA.id), current: docA.id)),
+            ChatMessage(role: .user, content: "about a since-deleted note",
+                        context: context(.document(deletedID), current: deletedID)),
+        ]
+        // Only docA resolves; the newest message references a note gone from the vault.
+        let resolver: (DocumentID) -> Document? = { $0 == docA.id ? docA : nil }
+        #expect(ChatNoteContext.focusNote(for: messages, resolveDocument: resolver)
+            == ChatNoteContext.Reference(title: "Note A", path: "a.md"))
+    }
+
+    @Test("Focus note is nil when every note context is unresolvable")
+    func focusNoteNilWhenAllUnresolvable() {
+        let deletedID = DocumentID()
+        let messages = [
+            ChatMessage(role: .user, content: "x", context: context(.document(deletedID), current: deletedID)),
+        ]
+        #expect(ChatNoteContext.focusNote(for: messages) { _ in nil } == nil)
+    }
+
+    @Test("Focus note from a selection scope resolves the current document")
+    func focusNoteSelectionScope() {
+        let doc = makeDocument(id: DocumentID(), title: "Selected", path: "sel.md")
+        let messages = [
+            ChatMessage(role: .user, content: "on selection", context: context(.selection, current: doc.id)),
+        ]
+        #expect(ChatNoteContext.focusNote(for: messages) { $0 == doc.id ? doc : nil }
+            == ChatNoteContext.Reference(title: "Selected", path: "sel.md"))
+    }
+
     // MARK: - instructionFragment
 
     @Test("Instruction fragment names the note and its path for note-focused scope")
