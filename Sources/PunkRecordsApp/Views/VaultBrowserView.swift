@@ -110,46 +110,37 @@ struct VaultBrowserView: View {
 
     // MARK: - Chats section (PUNK-9ss)
 
-    /// Collapsible "Chats" section below the notes tree: forked-thread nesting,
-    /// focus-note subtitles, active-thread highlight, per-row delete, and a New
-    /// Chat (+) button in the header. Tree assembly + sort is the pure, tested
-    /// ``ChatThreadHelpers/threadTree(from:)``; this is a thin shell over it.
+    /// Collapsible "Chats" section below the notes tree: an always-visible "New
+    /// Chat" row (a header accessory would hover-hide next to the disclosure
+    /// chevron — PUNK-qxz), then forked-thread nesting, focus-note subtitles,
+    /// active-thread highlight, and per-row delete. Tree assembly + sort is the
+    /// pure, tested ``ChatThreadHelpers/threadTree(from:)``.
     @ViewBuilder
     private var chatsSection: some View {
         Section(isExpanded: $chatsExpanded) {
-            if threadTree.isEmpty {
-                Text("No chats yet")
-                    .font(.callout)
+            Button {
+                appState.startNewChatThread()
+            } label: {
+                Label("New Chat", systemImage: "plus.circle")
                     .foregroundStyle(.secondary)
-                    .padding(.vertical, 4)
-            } else {
-                ForEach(threadTree) { node in
-                    ThreadTreeRow(
-                        node: node,
-                        activeThreadID: appState.chatController?.activeThread?.id,
-                        onSelect: { id in Task { await appState.openChatThread(id: id) } },
-                        onDelete: { summary in
-                            threadPendingDeletion = summary
-                            showThreadDeleteDialog = true
-                        }
-                    )
-                }
+            }
+            .buttonStyle(.plain)
+            .help("Start a new chat")
+            .accessibilityIdentifier("sidebarNewChatButton")
+
+            ForEach(threadTree) { node in
+                ThreadTreeRow(
+                    node: node,
+                    activeThreadID: appState.chatController?.activeThread?.id,
+                    onSelect: { id in Task { await appState.openChatThread(id: id) } },
+                    onDelete: { summary in
+                        threadPendingDeletion = summary
+                        showThreadDeleteDialog = true
+                    }
+                )
             }
         } header: {
-            HStack {
-                Text("Chats")
-                Spacer()
-                Button {
-                    appState.startNewChatThread()
-                } label: {
-                    Image(systemName: "plus")
-                        .imageScale(.small)
-                }
-                .buttonStyle(.borderless)
-                .help("Start a new chat")
-                .accessibilityLabel("New Chat")
-                .accessibilityIdentifier("sidebarNewChatButton")
-            }
+            Text("Chats")
         }
         .accessibilityIdentifier("sidebarThreadsSection")
     }

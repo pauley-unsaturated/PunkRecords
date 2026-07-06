@@ -426,22 +426,21 @@ final class ChatSessionController {
         storeWiringTask = nil
     }
 
-    /// Start a new, empty conversation, persisting the current one FIRST —
-    /// clearing must never destroy the only copy of a chat, even if an earlier
-    /// save was skipped or failed (PUNK-hdd). The fresh thread stays in memory
-    /// until it has content, so unused "New Chat" presses never clutter the
-    /// switcher. Also serves as the "clear" affordance.
+    /// Start a new, empty conversation, persisting the current one FIRST and
+    /// refusing to clear if that save did not land — clearing must never
+    /// destroy the only copy of a chat (PUNK-hdd, PUNK-b51). The fresh thread
+    /// stays in memory until it has content, so unused "New Chat" presses never
+    /// clutter the switcher. Also serves as the "clear" affordance.
     func newChat() async {
-        await persistActiveThread()
+        guard await persistActiveThread() else { return }
         startFreshThread()
     }
 
-    /// Switch to a stored thread, loading its messages into the transcript. A
-    /// no-op if the id can't be loaded. Persists the outgoing conversation
-    /// first (same defensive rule as ``newChat()``) so switching can never
-    /// discard unsaved messages.
+    /// Switch to a stored thread, loading its messages into the transcript.
+    /// Persists the outgoing conversation first and refuses to switch when that
+    /// save fails (same rule as ``newChat()``); a no-op for unloadable ids.
     func switchTo(threadID: UUID) async {
-        await persistActiveThread()
+        guard await persistActiveThread() else { return }
         guard let store = threadStore else { return }
         guard let loaded = try? await store.load(id: threadID) else { return }
         activate(loaded)
@@ -498,19 +497,21 @@ final class ChatSessionController {
     /// a brand-new thread only lands on disk once it has content. Re-derives the
     /// title and bumps `updatedAt`, then refreshes the switcher. Wires the store
     /// on demand and surfaces a visible error rather than silently dropping a
-    /// conversation when no store can be reached (PUNK-hdd).
-    func persistActiveThread() async {
-        guard !messages.isEmpty else { return }
+    /// conversation (PUNK-hdd). Returns `false` when there were messages to save
+    /// and the save did not land — callers about to clear/replace the transcript
+    /// must treat that as "do not discard" (PUNK-b51).
+    @discardableResult
+    func persistActiveThread() async -> Bool {
+        guard !messages.isEmpty else { return true }
         await ensureThreadStore()
         guard let store = threadStore else {
             appState.errorMessage = "Chat could not be saved — no vault is open."
-            return
+            return false
         }
         var thread = activeThread ?? ChatThread()
         // Derive the focus note (most recent message with a resolvable note
         // context) against the current vault so the summary can show it without
-        // loading bodies. Pure decision in ``ChatNoteContext``; we supply the
-        // in-memory document lookup.
+        // loading bodies. Pure decision in ``ChatNoteContext``.
         let focus = focusNoteReference(for: messages)
             .map { ThreadFocusNote(title: $0.title, path: $0.path) }
         thread.update(messages: messages, focusNote: focus)
@@ -519,9 +520,10 @@ final class ChatSessionController {
             try await store.save(thread)
         } catch {
             appState.errorMessage = "Failed to save chat: \(error.localizedDescription)"
-            return
+            return false
         }
         await refreshThreadSummaries()
+        return true
     }
 
     private func activate(_ thread: ChatThread) {
