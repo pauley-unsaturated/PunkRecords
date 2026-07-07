@@ -11,6 +11,9 @@ final class AppState {
     var isQuickOpenPresented = false
     var isChatPanelVisible = false
     var isBacklinksPanelVisible = true
+    /// Whether the per-heading metadata inspector (⌘I) is showing. Its bound
+    /// target is derived live from `editorCaretLocation` — see AppState+Inspector.
+    var isInspectorPresented = false
     var isLoading = false
     /// Progress of the in-flight vault open, driving the loading overlay.
     /// `nil` before the heavy work starts and once the vault is ready.

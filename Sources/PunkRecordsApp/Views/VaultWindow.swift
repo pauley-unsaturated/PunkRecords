@@ -66,6 +66,13 @@ struct VaultWindow: View {
         )) {
             RefileView()
         }
+        .inspector(isPresented: Binding(
+            get: { appState.isInspectorPresented },
+            set: { appState.isInspectorPresented = $0 }
+        )) {
+            InspectorPanel()
+                .inspectorColumnWidth(min: 240, ideal: 300, max: 420)
+        }
         .sheet(isPresented: Binding(
             get: { !appState.pendingRecoveries.isEmpty },
             // Dismissing the sheet without choosing keeps the sidecars on disk
@@ -108,6 +115,9 @@ struct VaultWindow: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .vaultWindowRefile)) { _ in
             appState.beginRefile()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .vaultWindowToggleInspector)) { _ in
+            appState.isInspectorPresented.toggle()
         }
     }
 
@@ -248,6 +258,7 @@ extension Notification.Name {
     static let vaultWindowExportHTML = Notification.Name("vaultWindowExportHTML")
     static let vaultWindowQuickOpen = Notification.Name("vaultWindowQuickOpen")
     static let vaultWindowRefile = Notification.Name("vaultWindowRefile")
+    static let vaultWindowToggleInspector = Notification.Name("vaultWindowToggleInspector")
 }
 
 // MARK: - UI Testing Support

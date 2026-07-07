@@ -105,6 +105,11 @@ struct PunkRecordsApp: App {
                 }
                 .keyboardShortcut("m", modifiers: [.command, .shift])
 
+                Button("Show Inspector") {
+                    NotificationCenter.default.post(name: .vaultWindowToggleInspector, object: nil)
+                }
+                .keyboardShortcut("i", modifiers: [.command])
+
                 Divider()
                 Toggle("Emacs Keybindings", isOn: $emacsKeybindings)
             }
