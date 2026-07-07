@@ -10,6 +10,8 @@ included:
   - Packages/PunkRecordsInfra/Tests
   - Packages/PunkRecordsTestSupport/Sources
   - Packages/PunkRecordsEvals/Sources
+  - Packages/PunkRecordsMCP/Sources
+  - Packages/PunkRecordsMCP/Tests
 
 excluded:
   - .build
@@ -18,6 +20,7 @@ excluded:
   - Packages/PunkRecordsInfra/.build
   - Packages/PunkRecordsTestSupport/.build
   - Packages/PunkRecordsEvals/.build
+  - Packages/PunkRecordsMCP/.build
   - Tests/PunkRecordsEvalTests/Fixtures   # generated/handwritten fixture data, not production code
   - Tests/PunkRecordsUITests/Fixtures
 
