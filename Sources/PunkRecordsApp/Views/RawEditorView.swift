@@ -265,6 +265,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             assertionFailure("Failed to initialize TreeSitterMarkdownHighlighter: \(error)")
         }
         coordinator.decorator = HybridUXDecorator(style: theme.decoratorStyle)
+        coordinator.markerFoldDecorator = MarkerFoldDecorator()
         if let isResolved = isWikilinkResolved {
             coordinator.wikilinkDecorator = WikilinkDecorator(
                 style: theme.wikilinkStyle,
@@ -363,6 +364,9 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         var highlighter: TreeSitterMarkdownHighlighter?
         var decorator: HybridUXDecorator?
         var wikilinkDecorator: WikilinkDecorator?
+        /// Folds markdown markers (`**`, `` ` ``, …) to zero width when the caret
+        /// is outside their element. Attribute + glyph only — never mutates text.
+        var markerFoldDecorator: MarkerFoldDecorator?
         /// Inline `[[`/`#` completion popover session (owns its own state).
         let completion = EditorCompletionCoordinator()
         /// `/` slash-command pop-up menu lifecycle.
@@ -399,6 +403,10 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             guard !textView.hasMarkedText() else { return }
             decorator?.decorate(textView: textView)
             wikilinkDecorator?.decorate(textView: textView)
+            // Folding runs last: it reads attributes the color passes set and it
+            // is the only pass that changes layout, so it owns the scoped
+            // glyph/layout invalidation.
+            markerFoldDecorator?.decorate(textView: textView)
         }
 
         /// Re-run decorations on scroll so content scrolled into view is styled.
