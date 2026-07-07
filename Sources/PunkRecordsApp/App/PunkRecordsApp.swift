@@ -5,6 +5,12 @@ import PunkRecordsCore
 @main
 struct PunkRecordsApp: App {
     @State private var recentsStore = RecentVaultsStore()
+
+    init() {
+        #if DEBUG
+        ChatPersistenceSelfTest.runIfRequested()
+        #endif
+    }
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     @AppStorage("editor.emacsKeybindings") private var emacsKeybindings = false
