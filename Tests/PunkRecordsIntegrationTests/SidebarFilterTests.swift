@@ -183,3 +183,153 @@ struct SidebarFilterTests {
         #expect(groups.reduce(0) { $0 + $1.hitCount } == allMatches)
     }
 }
+
+/// Tree-assembly tests for the recursive sidebar (PUNK-9y1). Exercises the pure
+/// ``SidebarFilter/folderTree(from:)`` end-to-end through the real grouping step,
+/// so filtering + title sort + nesting are all covered together.
+@Suite("SidebarFolderTree")
+struct SidebarFolderTreeTests {
+
+    private func doc(_ title: String, path: String, tags: [String] = []) -> Document {
+        Document(id: UUID(), title: title, content: "", path: path, tags: tags)
+    }
+
+    /// Build the tree the way the view does: group, then nest.
+    private func tree(_ docs: [Document], query: String = "") -> [SidebarFolderNode] {
+        SidebarFilter.folderTree(from: SidebarFilter.filter(documents: docs, query: query))
+    }
+
+    @Test("Single folder yields one top-level node named by its last component")
+    func singleFolder() {
+        let nodes = tree([doc("A", path: "Notes/A.md")])
+        #expect(nodes.count == 1)
+        #expect(nodes[0].name == "Notes")
+        #expect(nodes[0].path == "Notes")
+        #expect(nodes[0].documents.map(\.title) == ["A"])
+        #expect(nodes[0].children.isEmpty)
+    }
+
+    @Test("Subfolders nest under ONE top-level parent, not as flat siblings")
+    func nestsUnderParent() {
+        let nodes = tree([
+            doc("Code", path: "vault/code/Code.md"),
+            doc("Exp", path: "vault/experiments/Exp.md"),
+            doc("Note", path: "vault/notes/Note.md"),
+        ])
+        #expect(nodes.count == 1, "vault is ONE top-level node, not three full-path rows")
+        let vault = nodes[0]
+        #expect(vault.name == "vault")
+        #expect(vault.documents.isEmpty, "vault holds no direct docs")
+        #expect(vault.children.map(\.name) == ["code", "experiments", "notes"])
+    }
+
+    @Test("Deep nesting (4+ levels) builds a chain of nodes with cumulative paths")
+    func deepNesting() {
+        let nodes = tree([doc("Leaf", path: "a/b/c/d/Leaf.md")])
+        var node = nodes[0]
+        #expect(node.name == "a")
+        #expect(node.path == "a")
+        node = node.children[0]; #expect(node.name == "b"); #expect(node.path == "a/b")
+        node = node.children[0]; #expect(node.name == "c"); #expect(node.path == "a/b/c")
+        node = node.children[0]; #expect(node.name == "d"); #expect(node.path == "a/b/c/d")
+        #expect(node.children.isEmpty)
+        #expect(node.documents.map(\.title) == ["Leaf"])
+    }
+
+    @Test("Intermediate folders with no direct docs are still synthesized as nodes")
+    func doclessIntermediates() {
+        let nodes = tree([doc("Leaf", path: "code/blackwork/node/Leaf.md")])
+        let code = nodes[0]
+        #expect(code.name == "code")
+        #expect(code.documents.isEmpty, "code has no direct docs")
+        let blackwork = code.children[0]
+        #expect(blackwork.name == "blackwork")
+        #expect(blackwork.documents.isEmpty, "blackwork has no direct docs")
+        let nodeFolder = blackwork.children[0]
+        #expect(nodeFolder.name == "node")
+        #expect(nodeFolder.documents.map(\.title) == ["Leaf"])
+    }
+
+    @Test("Files at every level: a folder holds direct docs AND subfolders")
+    func filesAtEveryLevel() {
+        let nodes = tree([
+            doc("TopDoc", path: "proj/TopDoc.md"),
+            doc("SubDoc", path: "proj/sub/SubDoc.md"),
+        ])
+        let proj = nodes[0]
+        #expect(proj.documents.map(\.title) == ["TopDoc"])
+        #expect(proj.children.map(\.name) == ["sub"])
+        #expect(proj.children[0].documents.map(\.title) == ["SubDoc"])
+    }
+
+    @Test("Sibling folders sort case-insensitively at every level")
+    func siblingSort() {
+        let nodes = tree([
+            doc("Z", path: "root/Zeta/Z.md"),
+            doc("a", path: "root/alpha/a.md"),
+            doc("M", path: "root/Mid/M.md"),
+        ])
+        #expect(nodes[0].children.map(\.name) == ["alpha", "Mid", "Zeta"])
+    }
+
+    @Test("Top-level folders sort case-insensitively too")
+    func topLevelSort() {
+        let nodes = tree([
+            doc("Z", path: "Zeta/Z.md"),
+            doc("a", path: "alpha/a.md"),
+            doc("M", path: "Mid/M.md"),
+        ])
+        #expect(nodes.map(\.name) == ["alpha", "Mid", "Zeta"])
+    }
+
+    @Test("Root-level documents are excluded from the tree (render flat above it)")
+    func rootDocsExcluded() {
+        let nodes = tree([
+            doc("RootNote", path: "RootNote.md"),
+            doc("Nested", path: "Folder/Nested.md"),
+        ])
+        #expect(nodes.map(\.name) == ["Folder"], "root doc must not appear as a node")
+        #expect(nodes[0].documents.map(\.title) == ["Nested"])
+    }
+
+    @Test("totalDocumentCount sums the whole subtree")
+    func totalDocumentCount() {
+        let nodes = tree([
+            doc("A", path: "x/A.md"),
+            doc("B", path: "x/y/B.md"),
+            doc("C", path: "x/y/z/C.md"),
+        ])
+        #expect(nodes[0].totalDocumentCount == 3)     // x and everything below
+        #expect(nodes[0].children[0].totalDocumentCount == 2) // x/y and below
+    }
+
+    @Test("Filtering prunes the tree to only the matches' ancestor folders")
+    func filterPrunesToMatches() {
+        let docs = [
+            doc("Apple", path: "fruit/red/Apple.md"),
+            doc("Banana", path: "fruit/yellow/Banana.md"),
+            doc("Carrot", path: "veg/Carrot.md"),
+        ]
+        let nodes = tree(docs, query: "Apple")
+        #expect(nodes.map(\.name) == ["fruit"], "veg drops — no match inside")
+        let fruit = nodes[0]
+        #expect(fruit.children.map(\.name) == ["red"], "yellow drops — Banana filtered out")
+        #expect(fruit.children[0].documents.map(\.title) == ["Apple"])
+    }
+
+    @Test("Documents within a folder keep the group's localized title sort")
+    func docsSortedByTitle() {
+        let nodes = tree([
+            doc("zebra", path: "x/z.md"),
+            doc("Apple", path: "x/a.md"),
+            doc("banana", path: "x/b.md"),
+        ])
+        #expect(nodes[0].documents.map(\.title) == ["Apple", "banana", "zebra"])
+    }
+
+    @Test("Empty vault yields an empty tree")
+    func emptyVault() {
+        #expect(tree([]).isEmpty)
+        #expect(tree([doc("Only", path: "Only.md")]).isEmpty, "root-only docs mean no folder nodes")
+    }
+}

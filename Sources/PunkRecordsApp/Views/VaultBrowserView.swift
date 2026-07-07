@@ -25,6 +25,20 @@ struct VaultBrowserView: View {
         SidebarFilter.filter(documents: appState.documents, query: appState.sidebarFilterQuery)
     }
 
+    /// Documents that live at the vault root (folder == ""). They render flat at
+    /// the top of the sidebar, outside the folder tree — as they always have.
+    private var rootDocuments: [Document] {
+        groupedByFolder.first(where: { $0.folder.isEmpty })?.documents ?? []
+    }
+
+    /// The strict recursive notes tree, assembled from the flat folder groups by
+    /// the pure, tested ``SidebarFilter/folderTree(from:)`` (nesting, synthesized
+    /// doc-less intermediates, case-insensitive sibling sort). Root docs are
+    /// excluded — they render flat above via ``rootDocuments``.
+    private var folderTree: [SidebarFolderNode] {
+        SidebarFilter.folderTree(from: groupedByFolder)
+    }
+
     /// The sidebar Chats tree, assembled from the shared controller's summaries by
     /// the pure ``ChatThreadHelpers/threadTree(from:)`` (nesting, orphan/cycle
     /// safety, newest-first sort). Empty until the controller loads.
@@ -48,14 +62,17 @@ struct VaultBrowserView: View {
                                 .foregroundStyle(.secondary)
                                 .padding(.vertical, 4)
                         } else {
-                            ForEach(groupedByFolder) { group in
-                                if group.folder.isEmpty {
-                                    ForEach(group.documents) { doc in
-                                        row(for: doc, vaultRoot: vault.rootURL)
-                                    }
-                                } else {
-                                    folderDisclosure(group, vaultRoot: vault.rootURL)
-                                }
+                            // Root-level notes stay flat at the top, then the
+                            // strict recursive folder tree below them.
+                            ForEach(rootDocuments) { doc in
+                                row(for: doc, vaultRoot: vault.rootURL)
+                            }
+                            ForEach(folderTree) { node in
+                                FolderTreeRow(
+                                    node: node,
+                                    isFiltering: isFiltering,
+                                    rowForDocument: { row(for: $0, vaultRoot: vault.rootURL) }
+                                )
                             }
                         }
                     }
@@ -189,46 +206,6 @@ struct VaultBrowserView: View {
 
     // MARK: - Rows
 
-    @ViewBuilder
-    private func folderDisclosure(_ group: SidebarFolderGroup, vaultRoot: URL) -> some View {
-        // When filtering, force every folder containing a match to stay
-        // expanded so the matches are actually visible without an extra
-        // click. When unfiltered, restore the default folded behavior.
-        if isFiltering {
-            DisclosureGroup(isExpanded: .constant(true)) {
-                ForEach(group.documents) { doc in
-                    row(for: doc, vaultRoot: vaultRoot)
-                }
-            } label: {
-                folderLabel(group)
-            }
-        } else {
-            DisclosureGroup {
-                ForEach(group.documents) { doc in
-                    row(for: doc, vaultRoot: vaultRoot)
-                }
-            } label: {
-                folderLabel(group)
-            }
-        }
-    }
-
-    private func folderLabel(_ group: SidebarFolderGroup) -> some View {
-        HStack {
-            Text(group.folder)
-            if isFiltering {
-                Spacer()
-                Text("\(group.hitCount)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
-                    .background(.quaternary, in: Capsule())
-                    .accessibilityLabel("\(group.hitCount) matches")
-            }
-        }
-    }
-
     private func row(for doc: Document, vaultRoot: URL) -> some View {
         DocumentRow(
             document: doc,
@@ -292,6 +269,65 @@ struct VaultBrowserView: View {
               newPath != renamingPath,
               let doc = appState.documents.first(where: { $0.path == renamingPath }) else { return }
         commitRename(doc)
+    }
+}
+
+// MARK: - Folder tree row (PUNK-9y1)
+
+/// One folder in the sidebar's recursive notes tree. Renders a `DisclosureGroup`
+/// labeled with the folder's LAST path component; its body is the subfolder rows
+/// (recursive `FolderTreeRow`) followed by the folder's own document rows.
+/// Selection, rename, delete, per-document context menus, and accessibility all
+/// live on `DocumentRow` via the injected `rowForDocument` closure — so every one
+/// of those keeps working unchanged at ANY depth, since the document rows sit
+/// directly inside the enclosing `List(selection:)`.
+///
+/// Expansion is per-folder: an uncontrolled `DisclosureGroup` keeps its own
+/// collapsed-by-default state, keyed by the `ForEach` identity (the folder path),
+/// so expanding one branch never expands a sibling — mirroring `ThreadTreeRow`.
+///
+/// FILTERING interplay — approach (a), auto-expand ancestors of every match:
+/// while a query is active, every folder in the (already match-pruned) tree is
+/// force-expanded, revealing each matching document however deep without a click.
+/// The folders present in a filtered tree ARE exactly the ancestors of the
+/// matches, so force-expanding all of them is precisely "expand each match's
+/// ancestry". An empty query falls back to the strict, default-collapsed tree.
+private struct FolderTreeRow<RowContent: View>: View {
+    let node: SidebarFolderNode
+    let isFiltering: Bool
+    @ViewBuilder let rowForDocument: (Document) -> RowContent
+
+    var body: some View {
+        if isFiltering {
+            DisclosureGroup(isExpanded: .constant(true)) { content } label: { label }
+        } else {
+            DisclosureGroup { content } label: { label }
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        ForEach(node.children) { child in
+            FolderTreeRow(node: child, isFiltering: isFiltering, rowForDocument: rowForDocument)
+        }
+        ForEach(node.documents) { doc in
+            rowForDocument(doc)
+        }
+    }
+
+    private var label: some View {
+        HStack {
+            Label(node.name, systemImage: "folder")
+            if isFiltering {
+                Spacer()
+                Text("\(node.totalDocumentCount)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(.quaternary, in: Capsule())
+                    .accessibilityLabel("\(node.totalDocumentCount) matches")
+            }
+        }
     }
 }
 
