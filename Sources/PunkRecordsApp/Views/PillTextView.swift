@@ -3,9 +3,10 @@ import PunkRecordsCore
 import PunkRecordsInfra
 
 /// NSTextView subclass for the editor. Opens a wikilink/tag when its pill is
-/// clicked (instead of placing the caret), routes ↑/↓/Enter/Esc to the active
-/// completion popover, and dispatches Emacs chords when Emacs mode is on.
-/// Falls through to normal behavior everywhere else.
+/// clicked (instead of placing the caret), opens a markdown link's URL when its
+/// Live Preview label is clicked, routes ↑/↓/Enter/Esc to the active completion
+/// popover, and dispatches Emacs chords when Emacs mode is on. Falls through to
+/// normal behavior everywhere else.
 final class PillTextView: NSTextView {
     /// Resolves a character index to a wikilink click action, or nil if the
     /// index isn't inside a rendered pill. Set by the Coordinator.
@@ -17,6 +18,12 @@ final class PillTextView: NSTextView {
     var resolveTagClick: ((Int) -> String?)?
     /// Invoked with the tag name when a tag pill is clicked.
     var onTagClick: ((String) -> Void)?
+    /// Resolves a character index to a markdown link URL, or nil if the index
+    /// isn't on a rendered `[text](url)` label. Set by the Coordinator (only
+    /// while Live Preview is on).
+    var resolveLinkClick: ((Int) -> URL?)?
+    /// Invoked with the URL when a markdown link label is clicked.
+    var onLinkClick: ((URL) -> Void)?
     /// The `[[` completion popover, when one is active. Set by the Coordinator.
     weak var completionController: WikilinkCompletionController?
     /// Whether Emacs keybindings are active. Set by the Coordinator.
@@ -48,6 +55,10 @@ final class PillTextView: NSTextView {
         }
         if let tag = resolveTagClick?(index) {
             onTagClick?(tag)
+            return
+        }
+        if let url = resolveLinkClick?(index) {
+            onLinkClick?(url)
             return
         }
         completionController?.hide()

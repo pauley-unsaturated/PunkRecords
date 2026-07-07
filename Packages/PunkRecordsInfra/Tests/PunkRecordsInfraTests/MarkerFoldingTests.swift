@@ -238,6 +238,270 @@ struct MarkerFoldingTests {
     }
 }
 
+@Suite("MarkerFolding phase-1 elements (strikethrough, headings, wikilinks, links)")
+struct MarkerFoldingPhase1Tests {
+    private func folds(_ string: String, caret: Int) -> [NSRange] {
+        let text = string as NSString
+        return MarkerFolding.foldRanges(
+            in: text,
+            scanRange: NSRange(location: 0, length: text.length),
+            caret: caret
+        )
+    }
+
+    private func contains(_ folds: [NSRange], location: Int, length: Int) -> Bool {
+        folds.contains { $0.location == location && $0.length == length }
+    }
+
+    // MARK: - Strikethrough
+
+    @Test("Strikethrough ~~…~~ folds both tilde pairs")
+    func strikethroughPairing() {
+        // "a ~~x~~ b" — open [2,2], close [5,2].
+        let result = folds("a ~~x~~ b", caret: 0)
+        #expect(result.count == 2)
+        #expect(contains(result, location: 2, length: 2))
+        #expect(contains(result, location: 5, length: 2))
+    }
+
+    @Test("Caret inside strikethrough reveals")
+    func strikethroughCaretInside() {
+        #expect(folds("a ~~x~~ b", caret: 4).isEmpty)
+    }
+
+    @Test("Unterminated strikethrough does not fold")
+    func strikethroughUnterminated() {
+        #expect(folds("a ~~gone forever", caret: 0).isEmpty)
+    }
+
+    // MARK: - ATX headings
+
+    @Test("Heading folds hashes plus exactly one trailing space")
+    func headingMarkerFold() {
+        // "# Title\nbody" — marker [0,2] ("# "), caret on body line.
+        let result = folds("# Title\nbody", caret: 9)
+        #expect(result.count == 1)
+        #expect(contains(result, location: 0, length: 2))
+    }
+
+    @Test("Deeper heading levels fold all hashes plus one space")
+    func headingLevelThree() {
+        // "### Three\nx" — marker [0,4] ("### ").
+        let result = folds("### Three\nx", caret: 10)
+        #expect(result.count == 1)
+        #expect(contains(result, location: 0, length: 4))
+    }
+
+    @Test("Indented heading folds only the hash marker, not the indent")
+    func headingIndented() {
+        // "  ## Hi\nx" — marker [2,3] ("## "); the two leading spaces stay.
+        let result = folds("  ## Hi\nx", caret: 8)
+        #expect(result.count == 1)
+        #expect(contains(result, location: 2, length: 3))
+    }
+
+    @Test("Caret anywhere on the heading line reveals its marker")
+    func headingCaretOnLine() {
+        // Caret mid-title, at line start, and at line end (before \n) all reveal.
+        #expect(folds("# Title\nbody", caret: 4).isEmpty)
+        #expect(folds("# Title\nbody", caret: 0).isEmpty)
+        #expect(folds("# Title\nbody", caret: 7).isEmpty)
+    }
+
+    @Test("Caret at the start of the next line folds the heading")
+    func headingCaretNextLine() {
+        // Index 8 is the first char of "body" — outside the heading element.
+        #expect(folds("# Title\nbody", caret: 8).count == 1)
+    }
+
+    @Test("A #tag at line start is not a heading (no space after hashes)")
+    func hashTagNotHeading() {
+        #expect(folds("#tag and text", caret: 13).isEmpty)
+    }
+
+    @Test("A heading with only whitespace after the marker does not fold")
+    func emptyHeadingNotFolded() {
+        #expect(folds("#   \nbody", caret: 6).isEmpty)
+    }
+
+    @Test("Heading marker and inline bold on the same line fold independently")
+    func headingWithInlineBold() {
+        // "# Head **b** x\nnext" — heading marker [0,2]; bold ** at [7,2]/[10,2].
+        let all = folds("# Head **b** x\nnext", caret: 16)
+        #expect(all.count == 3)
+        #expect(contains(all, location: 0, length: 2))
+        #expect(contains(all, location: 7, length: 2))
+        #expect(contains(all, location: 10, length: 2))
+
+        // Caret inside the heading title reveals the heading but NOT the bold
+        // (per-element semantics).
+        let inTitle = folds("# Head **b** x\nnext", caret: 4)
+        #expect(inTitle.count == 2)
+        #expect(contains(inTitle, location: 7, length: 2))
+        #expect(contains(inTitle, location: 10, length: 2))
+    }
+
+    // MARK: - Wikilink brackets
+
+    @Test("Wikilink folds both bracket pairs")
+    func wikilinkPairing() {
+        // "see [[Note]] end" — [[ at [4,2], ]] at [10,2].
+        let result = folds("see [[Note]] end", caret: 0)
+        #expect(result.count == 2)
+        #expect(contains(result, location: 4, length: 2))
+        #expect(contains(result, location: 10, length: 2))
+    }
+
+    @Test("Caret inside or at the boundary of a wikilink reveals")
+    func wikilinkCaretInside() {
+        #expect(folds("see [[Note]] end", caret: 7).isEmpty)
+        #expect(folds("see [[Note]] end", caret: 4).isEmpty)  // start boundary
+        #expect(folds("see [[Note]] end", caret: 12).isEmpty) // end boundary
+    }
+
+    @Test("Unterminated wikilink does not fold")
+    func wikilinkUnterminated() {
+        #expect(folds("see [[Note and nothing", caret: 0).isEmpty)
+    }
+
+    // MARK: - Markdown links
+
+    @Test("Link folds the open bracket and the whole ](url) tail")
+    func linkFolding() {
+        // "see [text](http://x.co) end" — [ at [4,1], "](http://x.co)" at [9,14].
+        let result = folds("see [text](http://x.co) end", caret: 26)
+        #expect(result.count == 2)
+        #expect(contains(result, location: 4, length: 1))
+        #expect(contains(result, location: 9, length: 14))
+    }
+
+    @Test("Caret inside a link (label or url) reveals the whole link")
+    func linkCaretInside() {
+        #expect(folds("see [text](http://x.co) end", caret: 7).isEmpty)  // in label
+        #expect(folds("see [text](http://x.co) end", caret: 15).isEmpty) // in url
+    }
+
+    @Test("Image references are never folded")
+    func imageNotFolded() {
+        #expect(folds("shot: ![alt](img.png) done", caret: 0).isEmpty)
+    }
+
+    @Test("A link inside an inline code span is not folded as a link")
+    func linkInsideCodeSpan() {
+        // "`[a](b)` and text" — only the two backticks fold.
+        let result = folds("`[a](b)` and text", caret: 12)
+        #expect(result.count == 2)
+        #expect(contains(result, location: 0, length: 1))
+        #expect(contains(result, location: 7, length: 1))
+    }
+
+    @Test("A wikilink is not mis-read as a markdown link")
+    func wikilinkNotLink() {
+        // Only the wikilink brackets fold — no 1-char "[" fold anywhere.
+        let result = folds("see [[Note]] end", caret: 0)
+        #expect(result.allSatisfy { $0.length == 2 })
+    }
+
+    // MARK: - Fenced code blocks
+
+    @Test("Nothing folds inside a backtick fence")
+    func fenceExcludesInline() {
+        #expect(folds("```\n**bold** and `code`\n```\nafter", caret: 30).isEmpty)
+    }
+
+    @Test("A heading-looking line inside a fence does not fold; one outside does")
+    func fenceExcludesHeading() {
+        // "```\n# not a heading\n```\n# real\n" — only "# real" folds.
+        let result = folds("```\n# not a heading\n```\n# real\nx", caret: 31)
+        #expect(result.count == 1)
+        #expect(contains(result, location: 24, length: 2))
+    }
+
+    @Test("Nothing folds inside a tilde fence")
+    func tildeFenceExcludes() {
+        #expect(folds("~~~\n**bold** ~~x~~\n~~~\nafter", caret: 25).isEmpty)
+    }
+
+    @Test("A tilde fence line inside a backtick fence does not close it")
+    func mixedFenceChars() {
+        // The ~~~ line is content of the ``` fence; **bold** stays excluded,
+        // while **b2** after the real close folds.
+        let result = folds("```\n~~~\n**bold**\n```\nafter **b2**", caret: 22)
+        #expect(result.count == 2)
+        #expect(contains(result, location: 27, length: 2))
+        #expect(contains(result, location: 31, length: 2))
+    }
+
+    @Test("An unterminated fence excludes everything after it")
+    func unterminatedFence() {
+        // "**a**" before the fence folds; "**inside**" after the open fence doesn't.
+        let result = folds("before **a**\n```\n**inside**", caret: 0)
+        #expect(result.count == 2)
+        #expect(contains(result, location: 7, length: 2))
+        #expect(contains(result, location: 10, length: 2))
+    }
+}
+
+@Suite("MarkerFolding link hit testing")
+struct MarkerFoldingLinkTargetTests {
+    @Test("Index on the link label resolves to its URL")
+    func labelHit() {
+        let text = "see [text](http://x.co) end"
+        #expect(MarkerFolding.linkTarget(at: 5, in: text) == "http://x.co")
+        #expect(MarkerFolding.linkTarget(at: 8, in: text) == "http://x.co") // last label char
+    }
+
+    @Test("Indexes outside the label are not hits")
+    func nonLabelMisses() {
+        let text = "see [text](http://x.co) end"
+        #expect(MarkerFolding.linkTarget(at: 0, in: text) == nil)   // body text
+        #expect(MarkerFolding.linkTarget(at: 4, in: text) == nil)   // the [
+        #expect(MarkerFolding.linkTarget(at: 9, in: text) == nil)   // the ]
+        #expect(MarkerFolding.linkTarget(at: 15, in: text) == nil)  // inside the url
+        #expect(MarkerFolding.linkTarget(at: 25, in: text) == nil)  // after the link
+    }
+
+    @Test("Image references are not link hits")
+    func imageMiss() {
+        let text = "shot: ![alt](img.png) done"
+        #expect(MarkerFolding.linkTarget(at: 9, in: text) == nil)
+    }
+
+    @Test("Links inside inline code spans are not hits")
+    func codeSpanMiss() {
+        let text = "`[a](b)` and text"
+        #expect(MarkerFolding.linkTarget(at: 2, in: text) == nil)
+    }
+
+    @Test("Links inside fenced code blocks are not hits")
+    func fenceMiss() {
+        let text = "```\n[a](http://b.c)\n```"
+        #expect(MarkerFolding.linkTarget(at: 5, in: text) == nil)
+    }
+
+    @Test("Wikilinks are not link hits")
+    func wikilinkMiss() {
+        let text = "see [[Note]] end"
+        #expect(MarkerFolding.linkTarget(at: 7, in: text) == nil)
+    }
+
+    @Test("URL whitespace is trimmed; an empty url is not a hit")
+    func urlTrimmingAndEmpty() {
+        #expect(MarkerFolding.linkTarget(at: 1, in: "[t]( http://x.co )") == "http://x.co")
+        #expect(MarkerFolding.linkTarget(at: 1, in: "[t]()") == nil)
+    }
+
+    @Test("Emoji before the link keeps UTF-16 label offsets correct")
+    func emojiOffsets() {
+        // "😀 [go](http://x.co)" — 😀 is 2 UTF-16 units, so [ is at 3 and the
+        // label "go" spans [4,2].
+        let text = "😀 [go](http://x.co)"
+        #expect(MarkerFolding.linkTarget(at: 4, in: text) == "http://x.co")
+        #expect(MarkerFolding.linkTarget(at: 3, in: text) == nil) // the [
+        #expect(MarkerFolding.linkTarget(at: 6, in: text) == nil) // the ]
+    }
+}
+
 @Suite("MarkerFolding scoped invalidation")
 struct MarkerFoldingInvalidationTests {
     private func range(_ location: Int, _ length: Int) -> NSRange {

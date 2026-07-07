@@ -8,8 +8,8 @@ public extension NSAttributedString.Key {
     static let pillBackground = NSAttributedString.Key("PunkRecordsPillBackground")
 
     /// Value: any non-nil marker (e.g. `true`) — the character should render at
-    /// zero width (a null glyph). Set by `MarkerFoldDecorator` on markdown
-    /// delimiter characters (`**`, `` ` ``, …) whose element the caret is
+    /// zero width (a null glyph). Set by `LivePreviewDecorator` on markdown
+    /// marker characters (`**`, `` ` ``, `# `, …) whose element the caret is
     /// outside, so the marker visually recedes without ever mutating the source.
     /// Read by `WikilinkPillLayoutManager`'s glyph-generation delegate hook.
     static let punkFolded = NSAttributedString.Key("PunkRecordsFolded")

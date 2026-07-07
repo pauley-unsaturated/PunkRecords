@@ -10,6 +10,7 @@ struct RawEditorView: View {
     @State private var isPreviewing = false
     @AppStorage("editor.emacsKeybindings") private var emacsKeybindings = false
     @AppStorage("editor.themeID") private var themeID = EditorThemeCatalog.defaultID
+    @AppStorage("editor.livePreview") private var livePreview = true
 
     var body: some View {
         // Resolve the user's chosen editor theme (persisted in Settings). The
@@ -67,7 +68,8 @@ struct RawEditorView: View {
                             appState.sidebarFilterQuery = "tag:\(tag)"
                         },
                         emacsEnabled: emacsKeybindings,
-                        theme: theme
+                        theme: theme,
+                        livePreviewEnabled: livePreview
                     )
                     .id(themeID)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -216,6 +218,9 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
     /// Whether Emacs keybindings are active in the editor.
     var emacsEnabled: Bool = false
     var theme: EditorTheme = .dracula
+    /// Whether Live Preview marker folding is active (mirrors the
+    /// `editor.livePreview` setting). When false the editor stays dim-only.
+    var livePreviewEnabled: Bool = true
 
     init(
         viewModel: DocumentEditorViewModel,
@@ -229,7 +234,8 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         tagCompletions: ((String) -> [String])? = nil,
         onTagClick: ((String) -> Void)? = nil,
         emacsEnabled: Bool = false,
-        theme: EditorTheme = .dracula
+        theme: EditorTheme = .dracula,
+        livePreviewEnabled: Bool = true
     ) {
         self.viewModel = viewModel
         self.onAskAI = onAskAI
@@ -243,6 +249,7 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         self.onTagClick = onTagClick
         self.emacsEnabled = emacsEnabled
         self.theme = theme
+        self.livePreviewEnabled = livePreviewEnabled
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -265,7 +272,10 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             assertionFailure("Failed to initialize TreeSitterMarkdownHighlighter: \(error)")
         }
         coordinator.decorator = HybridUXDecorator(style: theme.decoratorStyle)
-        coordinator.markerFoldDecorator = MarkerFoldDecorator()
+        coordinator.livePreviewDecorator = LivePreviewDecorator(
+            style: .init(linkColor: theme.highlighterTheme.linkColor)
+        )
+        coordinator.livePreviewEnabled = livePreviewEnabled
         if let isResolved = isWikilinkResolved {
             coordinator.wikilinkDecorator = WikilinkDecorator(
                 style: theme.wikilinkStyle,
@@ -282,6 +292,17 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             return coordinator.wikilinkDecorator?.tagTarget(at: index, in: textView.string)
         }
         textView.onTagClick = onTagClick
+        // Markdown links render as just their styled label under Live Preview,
+        // so a click on the label opens the URL (like the preview pane would).
+        // In source mode (Live Preview off) clicks place the caret as usual.
+        textView.resolveLinkClick = { [weak coordinator, weak textView] index in
+            guard let coordinator, let textView, coordinator.livePreviewEnabled else { return nil }
+            guard let target = MarkerFolding.linkTarget(at: index, in: textView.string) else { return nil }
+            return URL(string: target)
+        }
+        textView.onLinkClick = { url in
+            NSWorkspace.shared.open(url)
+        }
 
         // Inline completion popover, shared by `[[` wikilinks and `#` tags.
         coordinator.completion.wikilinkCompletions = wikilinkCompletions
@@ -334,6 +355,11 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         context.coordinator.emacsEnabled = emacsEnabled
+        if context.coordinator.livePreviewEnabled != livePreviewEnabled {
+            context.coordinator.livePreviewEnabled = livePreviewEnabled
+            // Re-run so the toggle applies immediately (fold or unfold all).
+            context.coordinator.runDecorations(on: textView)
+        }
         if !viewModel.isDirty && textView.string != viewModel.document.content {
             textView.textStorage?.setAttributedString(
                 NSAttributedString(
@@ -364,9 +390,13 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
         var highlighter: TreeSitterMarkdownHighlighter?
         var decorator: HybridUXDecorator?
         var wikilinkDecorator: WikilinkDecorator?
-        /// Folds markdown markers (`**`, `` ` ``, …) to zero width when the caret
-        /// is outside their element. Attribute + glyph only — never mutates text.
-        var markerFoldDecorator: MarkerFoldDecorator?
+        /// Folds markdown markers (`**`, `` ` ``, `# `, `[[]]`, links…) to zero
+        /// width when the caret is outside their element and styles link labels.
+        /// Attribute + glyph only — never mutates text.
+        var livePreviewDecorator: LivePreviewDecorator?
+        /// Whether Live Preview folding is on; mirrored from the @AppStorage
+        /// setting on every SwiftUI update (like `emacsEnabled`).
+        var livePreviewEnabled = true
         /// Inline `[[`/`#` completion popover session (owns its own state).
         let completion = EditorCompletionCoordinator()
         /// `/` slash-command pop-up menu lifecycle.
@@ -405,8 +435,10 @@ struct EditorTextViewRepresentable: NSViewRepresentable {
             wikilinkDecorator?.decorate(textView: textView)
             // Folding runs last: it reads attributes the color passes set and it
             // is the only pass that changes layout, so it owns the scoped
-            // glyph/layout invalidation.
-            markerFoldDecorator?.decorate(textView: textView)
+            // glyph/layout invalidation. Disabling it (Live Preview off) makes
+            // the next pass unfold everything, restoring dim-only source mode.
+            livePreviewDecorator?.isEnabled = livePreviewEnabled
+            livePreviewDecorator?.decorate(textView: textView)
         }
 
         /// Re-run decorations on scroll so content scrolled into view is styled.

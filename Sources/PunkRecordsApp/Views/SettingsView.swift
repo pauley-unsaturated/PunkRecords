@@ -170,6 +170,7 @@ private struct ProvidersSettingsTab: View {
 
 private struct EditorSettingsTab: View {
     @AppStorage("editor.themeID") private var themeID = EditorThemeCatalog.defaultID
+    @AppStorage("editor.livePreview") private var livePreview = true
 
     var body: some View {
         Form {
@@ -180,6 +181,12 @@ private struct EditorSettingsTab: View {
                     }
                 }
                 .help("Applies to the editor and preview. Changes take effect immediately.")
+            }
+            Section("Live Preview") {
+                Toggle("Hide markdown syntax while writing", isOn: $livePreview)
+                    .help("Folds markers like **, #, and link URLs away unless the caret is "
+                        + "inside them, and makes [text](url) links clickable. Turn off for "
+                        + "plain source mode with every character visible.")
             }
         }
         .formStyle(.grouped)
