@@ -158,6 +158,111 @@ struct ChatThreadTests {
         #expect(source.messages.count == 4)
     }
 
+    // MARK: - Rewind
+
+    /// A four-message transcript with stable ids, mirroring ``forkSource()``.
+    private func rewindMessages() -> [ChatMessage] {
+        [
+            ChatMessage(role: .user, content: "What is in my vault?"),
+            ChatMessage(role: .assistant, content: "Notes about DSP."),
+            ChatMessage(role: .user, content: "Tell me more about filters."),
+            ChatMessage(role: .assistant, content: "Filters shape frequency content."),
+        ]
+    }
+
+    @Test("Rewind keeps messages up to and including the target, dropping the rest")
+    func rewindKeepsThroughTarget() {
+        let messages = rewindMessages()
+        let target = messages[1]
+        let rewound = try! #require(ChatThreadHelpers.rewind(messages, to: target.id))
+        #expect(rewound.map(\.id) == [messages[0].id, messages[1].id])
+    }
+
+    @Test("Rewinding to an unknown message id is a no-op (nil)")
+    func rewindUnknownIDNoOp() {
+        let messages = rewindMessages()
+        #expect(ChatThreadHelpers.rewind(messages, to: UUID()) == nil)
+    }
+
+    @Test("Rewinding to the first message yields a single-message transcript")
+    func rewindAtFirstMessage() {
+        let messages = rewindMessages()
+        let rewound = try! #require(ChatThreadHelpers.rewind(messages, to: messages[0].id))
+        #expect(rewound.map(\.id) == [messages[0].id])
+    }
+
+    @Test("Rewinding to the last message is a full copy — nothing dropped")
+    func rewindAtLastMessage() {
+        let messages = rewindMessages()
+        let last = messages[messages.count - 1]
+        let rewound = try! #require(ChatThreadHelpers.rewind(messages, to: last.id))
+        #expect(rewound.map(\.id) == messages.map(\.id))
+    }
+
+    @Test("Rewind never mutates the source array")
+    func rewindLeavesSourceUnchanged() {
+        let messages = rewindMessages()
+        let before = messages
+        _ = ChatThreadHelpers.rewind(messages, to: messages[1].id)
+        #expect(messages == before)
+    }
+
+    // MARK: - Rewind side-effect scan (created notes)
+
+    private func toolMessage(
+        name: String = "create_note",
+        output: String,
+        isError: Bool = false,
+        isInFlight: Bool = false
+    ) -> ChatMessage {
+        ChatMessage(
+            role: .tool,
+            content: "",
+            toolCall: ToolCallInfo(name: name, arguments: "{}", output: output, isError: isError, isInFlight: isInFlight)
+        )
+    }
+
+    @Test("Side-effect scan extracts the created path from a successful create_note call")
+    func createdNotePathsExtractsPath() {
+        let messages = [
+            ChatMessage(role: .user, content: "make a note"),
+            toolMessage(output: "Created note 'Filters' at dsp/Filters.md"),
+            ChatMessage(role: .assistant, content: "Done."),
+        ]
+        #expect(ChatThreadHelpers.createdNotePaths(in: messages) == ["dsp/Filters.md"])
+    }
+
+    @Test("Side-effect scan collects paths from multiple create_note calls, in order")
+    func createdNotePathsMultiple() {
+        let messages = [
+            toolMessage(output: "Created note 'One' at a/One.md"),
+            toolMessage(output: "Created note 'Two' at b/Two.md"),
+        ]
+        #expect(ChatThreadHelpers.createdNotePaths(in: messages) == ["a/One.md", "b/Two.md"])
+    }
+
+    @Test("Side-effect scan ignores errored, in-flight, and non-create_note tool calls")
+    func createdNotePathsIgnoresNonMatches() {
+        let messages = [
+            toolMessage(output: "Created note 'Failed' at x/Failed.md", isError: true),
+            toolMessage(output: "Created note 'Pending' at x/Pending.md", isInFlight: true),
+            toolMessage(name: "vault_search", output: "3 hits"),
+            ChatMessage(role: .assistant, content: "no tool call here"),
+        ]
+        #expect(ChatThreadHelpers.createdNotePaths(in: messages).isEmpty)
+    }
+
+    @Test("Side-effect scan handles a title containing the substring \" at \"")
+    func createdNotePathsHandlesAmbiguousTitle() {
+        let messages = [toolMessage(output: "Created note 'Meeting at Noon' at daily/Meeting-at-Noon.md")]
+        #expect(ChatThreadHelpers.createdNotePaths(in: messages) == ["daily/Meeting-at-Noon.md"])
+    }
+
+    @Test("Side-effect scan on an empty transcript returns no paths")
+    func createdNotePathsEmpty() {
+        #expect(ChatThreadHelpers.createdNotePaths(in: []).isEmpty)
+    }
+
     // MARK: - Codable round-trips
 
     /// Round-trip a thread whose messages carry a populated `MessageContext` and

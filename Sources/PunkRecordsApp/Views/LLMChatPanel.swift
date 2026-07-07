@@ -105,6 +105,8 @@ struct LLMChatPanel: View {
                                         onReportIssueCopy: { Task { await controller.reportIssueCopy(message) } },
                                         onReportIssueSave: { Task { await controller.reportIssueSave(message) } },
                                         onFork: { Task { await controller.forkThread(at: message.id) } },
+                                        onRewind: { controller.requestRewind(to: message.id) },
+                                        isStreaming: controller.isStreaming,
                                         contextChip: controller.contextChip(for: message),
                                         onOpenContextNote: { controller.openNote(path: $0) }
                                     )
@@ -171,6 +173,21 @@ struct LLMChatPanel: View {
         }
         .sheet(isPresented: $controller.isShowingSummarySaveSheet) {
             SummarySaveSheet(controller: controller)
+        }
+        .confirmationDialog(
+            "Rewind to this message?",
+            isPresented: $controller.isShowingRewindConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Rewind", role: .destructive) {
+                Task { await controller.confirmRewind() }
+            }
+            .accessibilityIdentifier("chatRewindConfirm")
+            Button("Cancel", role: .cancel) {
+                controller.cancelRewind()
+            }
+        } message: {
+            Text(controller.rewindConfirmationMessage)
         }
         .alert("Summary not saved", isPresented: $controller.isShowingSummaryFallback) {
             Button("Retry Save") { controller.retrySaveSummary() }

@@ -77,6 +77,60 @@ public enum ChatThreadHelpers {
         )
     }
 
+    // MARK: - Rewind
+
+    /// Rewind `messages` to `messageID`: keep every message up to AND INCLUDING
+    /// it, dropping everything after — the inverse slice direction from
+    /// ``fork(_:atMessageID:newThreadID:now:)`` (which also keeps through the
+    /// target) but applied in place to a live transcript rather than spawning a
+    /// new thread. Returns `nil` when `messageID` isn't present in `messages` —
+    /// nothing to rewind, so the caller should treat it as a no-op rather than
+    /// persist an unchanged transcript.
+    ///
+    /// Rewinding at the last message is a no-op-shaped full copy (nothing
+    /// dropped); rewinding at the first message yields a single-message
+    /// transcript. `messages` is never mutated (value semantics).
+    public static func rewind(_ messages: [ChatMessage], to messageID: UUID) -> [ChatMessage]? {
+        guard let index = messages.firstIndex(where: { $0.id == messageID }) else {
+            return nil
+        }
+        return Array(messages[...index])
+    }
+
+    /// Vault-relative paths of notes created via `create_note` tool calls among
+    /// `messages` — used to warn the user, before a rewind, that those notes are
+    /// NOT deleted along with the rewound-away turns (silently deleting vault
+    /// content on rewind would be worse than leaving it behind).
+    ///
+    /// Scans `.tool`-role rows for a completed (not in-flight), non-error
+    /// `create_note` call and parses the created path out of
+    /// ``CreateNoteTool``'s success message (`"Created note '<title>' at
+    /// <path>"`) rather than the call's `arguments` — arguments only reflect
+    /// what was REQUESTED (e.g. before a filename-collision suffix is applied),
+    /// while the tool result reflects what actually landed on disk. This couples
+    /// the parse to `CreateNoteTool`'s output phrasing; if that ever changes
+    /// independently, this scan starts returning fewer paths (never wrong ones,
+    /// since a non-matching output is simply skipped) rather than crashing.
+    public static func createdNotePaths(in messages: [ChatMessage]) -> [String] {
+        messages.compactMap { message in
+            guard message.role == .tool,
+                  let toolCall = message.toolCall,
+                  toolCall.name == "create_note",
+                  !toolCall.isError,
+                  !toolCall.isInFlight else { return nil }
+            return createdNotePath(fromToolOutput: toolCall.output)
+        }
+    }
+
+    /// Parses `"Created note '<title>' at <path>"` (``CreateNoteTool``'s success
+    /// message) for the trailing path. Searches for the LAST " at " so a title
+    /// that itself contains the substring " at " doesn't fool the split.
+    private static func createdNotePath(fromToolOutput output: String) -> String? {
+        guard let range = output.range(of: " at ", options: .backwards) else { return nil }
+        let path = output[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+        return path.isEmpty ? nil : path
+    }
+
     /// Summaries sorted for the switcher: most-recently-updated first, with a
     /// stable id tiebreak so equal timestamps order deterministically.
     public static func sortedSummaries(_ summaries: [ThreadSummary]) -> [ThreadSummary] {

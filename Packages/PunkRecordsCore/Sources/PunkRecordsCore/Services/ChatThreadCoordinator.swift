@@ -222,6 +222,63 @@ public final class ChatThreadCoordinator {
         return true
     }
 
+    /// Vault-relative paths of notes that `create_note` calls in the turns AFTER
+    /// `messageID` created — the side effects a rewind TO `messageID` would
+    /// leave behind (rewinding never deletes them). Meant to be called BEFORE
+    /// ``rewind(to:)`` so a confirmation dialog can list what will be kept.
+    /// Empty when `messageID` isn't in the live transcript, is the last message
+    /// (nothing would be removed), or no removed turn created a note.
+    public func sideEffectNotePaths(afterRewindTo messageID: UUID) -> [String] {
+        guard let index = messages.firstIndex(where: { $0.id == messageID }),
+              index + 1 < messages.count else { return [] }
+        return ChatThreadHelpers.createdNotePaths(in: Array(messages[(index + 1)...]))
+    }
+
+    /// Rewind the active conversation to `messageID`: keep the transcript up to
+    /// and including that message, drop everything after, and persist the
+    /// truncation IMMEDIATELY (PUNK-xzw) — so a crash right after a rewind can't
+    /// resurrect the removed tail. Side effects from the removed turns (e.g.
+    /// notes created via `create_note`) are intentionally left in the vault —
+    /// see ``sideEffectNotePaths(afterRewindTo:)`` for what a confirmation
+    /// dialog should warn about BEFORE calling this.
+    ///
+    /// A no-op (returns `true`, nothing changes) when `messageID` isn't in the
+    /// live transcript. On save failure, ROLLS BACK the in-memory transcript to
+    /// its pre-rewind contents and reports the error — same discipline as
+    /// `newChat`'s persist-before-clear rule (PUNK-b51): the UI must never keep
+    /// showing a truncated transcript that didn't actually make it to disk.
+    @discardableResult
+    public func rewind(to messageID: UUID) async -> Bool {
+        guard let truncated = ChatThreadHelpers.rewind(messages, to: messageID) else { return true }
+
+        await ensureStore()
+        guard let store = threadStore else {
+            reportError("Chat could not be saved — no vault is open.")
+            return false
+        }
+
+        let originalMessages = messages
+        let originalThread = activeThread
+
+        messages = truncated
+        var thread = activeThread ?? ChatThread()
+        thread.update(messages: truncated, focusNote: focusNote(truncated))
+        activeThread = thread
+
+        do {
+            try await store.save(thread)
+        } catch {
+            // Roll back — the UI must never show a truncated transcript that
+            // failed to reach disk while disk still holds the long one.
+            messages = originalMessages
+            activeThread = originalThread
+            reportError("Failed to save chat: \(error.localizedDescription)")
+            return false
+        }
+        await refreshSummaries()
+        return true
+    }
+
     private func activate(_ thread: ChatThread) {
         activeThread = thread
         messages = thread.messages

@@ -256,4 +256,114 @@ struct ChatThreadCoordinatorTests {
         #expect(stored[sourceID] != nil)
         #expect(stored[coordinator.activeThread!.id] != nil)
     }
+
+    // MARK: - Rewind (PUNK-xzw)
+
+    @Test("rewind truncates the live transcript and persists immediately")
+    func rewindTruncatesAndPersists() async {
+        let harness = Harness()
+        let coordinator = harness.makeCoordinator()
+
+        let m1 = userMessage("first question")
+        let m2 = ChatMessage(role: .assistant, content: "first answer")
+        let m3 = userMessage("second question")
+        let m4 = ChatMessage(role: .assistant, content: "second answer")
+        coordinator.messages = [m1, m2, m3, m4]
+        _ = await coordinator.persistActiveThread()
+        let threadID = coordinator.activeThread!.id
+        let saveCountBeforeRewind = await harness.store.saveCount
+
+        let rewound = await coordinator.rewind(to: m2.id)
+
+        #expect(rewound)
+        // Kept through m2, dropped m3/m4.
+        #expect(coordinator.messages.map(\.id) == [m1.id, m2.id])
+        // Same thread, not a fork — id unchanged.
+        #expect(coordinator.activeThread?.id == threadID)
+        // Persisted immediately: the stored copy on "disk" also reflects the
+        // truncation (a crash right after rewind can't resurrect the tail).
+        let stored = await harness.store.stored
+        #expect(stored[threadID]?.messages.map(\.id) == [m1.id, m2.id])
+        #expect(await harness.store.saveCount == saveCountBeforeRewind + 1)
+    }
+
+    @Test("rewind to an unknown message id is a no-op and does not touch the store")
+    func rewindUnknownIDIsNoOp() async {
+        let harness = Harness()
+        let coordinator = harness.makeCoordinator()
+
+        coordinator.messages = [userMessage("only message")]
+        _ = await coordinator.persistActiveThread()
+        let saveCountBefore = await harness.store.saveCount
+
+        let rewound = await coordinator.rewind(to: UUID())
+
+        #expect(rewound)
+        #expect(coordinator.messages.count == 1)
+        #expect(await harness.store.saveCount == saveCountBefore)   // no extra save attempted
+        #expect(harness.errors.isEmpty)
+    }
+
+    @Test("rewind rolls back the in-memory transcript and reports an error when the save fails (PUNK-b51)")
+    func rewindRollsBackOnSaveFailure() async {
+        let harness = Harness()
+        let coordinator = harness.makeCoordinator()
+
+        let m1 = userMessage("keep me")
+        let m2 = ChatMessage(role: .assistant, content: "reply")
+        let m3 = userMessage("would be dropped")
+        coordinator.messages = [m1, m2, m3]
+        _ = await coordinator.persistActiveThread()
+        let threadID = coordinator.activeThread!.id
+
+        await harness.store.armNextSaveFailure()
+        let rewound = await coordinator.rewind(to: m2.id)
+
+        #expect(!rewound)
+        // In-memory transcript rolled back to its pre-rewind (full) contents —
+        // the UI must never show a truncated transcript disk doesn't have.
+        #expect(coordinator.messages.map(\.id) == [m1.id, m2.id, m3.id])
+        #expect(!harness.errors.isEmpty)
+        // Disk still holds the pre-rewind (full) thread — the failed save never landed.
+        let stored = await harness.store.stored
+        #expect(stored[threadID]?.messages.map(\.id) == [m1.id, m2.id, m3.id])
+    }
+
+    @Test("sideEffectNotePaths(afterRewindTo:) lists create_note paths from the turns that would be dropped")
+    func sideEffectNotePathsListsDroppedCreateNoteCalls() async {
+        let harness = Harness()
+        let coordinator = harness.makeCoordinator()
+
+        let m1 = userMessage("make some notes")
+        let created = ChatMessage(
+            role: .tool,
+            content: "",
+            toolCall: ToolCallInfo(
+                name: "create_note",
+                arguments: "{}",
+                output: "Created note 'Filters' at dsp/Filters.md",
+                isError: false,
+                isInFlight: false
+            )
+        )
+        let m3 = ChatMessage(role: .assistant, content: "Done.")
+        coordinator.messages = [m1, created, m3]
+
+        let paths = coordinator.sideEffectNotePaths(afterRewindTo: m1.id)
+
+        #expect(paths == ["dsp/Filters.md"])
+    }
+
+    @Test("sideEffectNotePaths(afterRewindTo:) is empty when rewinding at the last message")
+    func sideEffectNotePathsEmptyAtLastMessage() async {
+        let harness = Harness()
+        let coordinator = harness.makeCoordinator()
+
+        let m1 = userMessage("hi")
+        let m2 = ChatMessage(role: .assistant, content: "hello")
+        coordinator.messages = [m1, m2]
+
+        #expect(coordinator.sideEffectNotePaths(afterRewindTo: m2.id).isEmpty)
+        #expect(coordinator.sideEffectNotePaths(afterRewindTo: UUID()).isEmpty)
+    }
 }

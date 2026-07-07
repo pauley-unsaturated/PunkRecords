@@ -12,6 +12,14 @@ struct ChatBubble: View {
     /// (`ToolCallBubble`) intentionally omit it — a fork ending on an in-flight
     /// tool call rather than a conversational turn is a confusing branch point.
     let onFork: () -> Void
+    /// Truncate the active thread to this message, dropping everything after it
+    /// (PUNK-xzw). Offered alongside ``onFork`` on user and assistant bubbles;
+    /// tool-call chips omit it for the same reason they omit forking. The view
+    /// disables the menu item while a turn is streaming — never offered mid-turn.
+    let onRewind: () -> Void
+    /// Disables ``onRewind``'s context-menu item while a turn is in flight —
+    /// rewinding mid-stream is never allowed.
+    let isStreaming: Bool
     /// The selected note this message's turn was about, resolved from its
     /// persisted ``MessageContext`` (see `ChatSessionController.contextChip`).
     /// `nil` for vault-wide turns — no chip renders.
@@ -120,6 +128,9 @@ struct ChatBubble: View {
         .contextMenu {
             Button("Fork from Here", systemImage: "arrow.triangle.branch", action: onFork)
                 .accessibilityIdentifier("chatForkFromHere")
+            Button("Rewind to Here…", systemImage: "arrow.uturn.backward", action: onRewind)
+                .disabled(isStreaming)
+                .accessibilityIdentifier("chatRewindToHere")
         }
     }
 

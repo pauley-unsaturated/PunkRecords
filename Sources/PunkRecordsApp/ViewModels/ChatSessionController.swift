@@ -445,6 +445,53 @@ final class ChatSessionController {
         await coordinator.forkThread(at: messageID)
     }
 
+    // MARK: - Rewind (PUNK-xzw)
+
+    /// The message id "Rewind to here…" was invoked on. Non-`nil` drives the
+    /// confirmation dialog; `nil` once dismissed/confirmed.
+    var rewindTargetMessageID: UUID?
+    var isShowingRewindConfirmation = false
+
+    /// Vault-relative paths of notes that `create_note` calls in the
+    /// about-to-be-dropped turns created, computed when the dialog opens so its
+    /// message can warn the user they are kept, not deleted. Empty when nothing
+    /// removed by the pending rewind created a note.
+    private(set) var rewindSideEffectNotePaths: [String] = []
+
+    /// Open the confirmation dialog for rewinding to `messageID`. The view
+    /// disables the menu item while `isStreaming`, so this is never called
+    /// mid-turn.
+    func requestRewind(to messageID: UUID) {
+        rewindTargetMessageID = messageID
+        rewindSideEffectNotePaths = coordinator.sideEffectNotePaths(afterRewindTo: messageID)
+        isShowingRewindConfirmation = true
+    }
+
+    /// Confirmation-dialog message body: names any notes the removed turns
+    /// created (kept in the vault, never auto-deleted) or falls back to a plain
+    /// "can't be undone" sentence when there are none.
+    var rewindConfirmationMessage: String {
+        guard !rewindSideEffectNotePaths.isEmpty else {
+            return "Messages after this point will be removed. This can't be undone."
+        }
+        let list = rewindSideEffectNotePaths.joined(separator: ", ")
+        return "Messages after this point will be removed. Notes created by rewound turns are kept in the vault: \(list)."
+    }
+
+    /// User declined the confirmation — discard the pending target.
+    func cancelRewind() {
+        rewindTargetMessageID = nil
+        rewindSideEffectNotePaths = []
+    }
+
+    /// User confirmed — perform the rewind and persist it immediately.
+    func confirmRewind() async {
+        guard let messageID = rewindTargetMessageID else { return }
+        rewindTargetMessageID = nil
+        rewindSideEffectNotePaths = []
+        await coordinator.rewind(to: messageID)
+    }
+
     /// Persist the active thread's current messages. Returns `false` when there
     /// were messages to save and the save did not land — callers about to clear
     /// the transcript must treat that as "do not discard" (PUNK-b51).
