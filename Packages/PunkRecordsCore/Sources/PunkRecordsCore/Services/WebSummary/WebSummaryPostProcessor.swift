@@ -25,6 +25,32 @@ import Foundation
 /// end of a string that's already a substring of the page text yields another
 /// substring of the page text.
 public enum WebSummaryPostProcessor {
+    /// The resolved link for one citation, plus whether resolution actually
+    /// succeeded (vs. falling back to the bare page URL).
+    public struct CitationLinkOutcome: Sendable, Equatable {
+        /// The link to render — the anchored deep-link when resolved, the
+        /// bare page/source URL otherwise.
+        public let url: URL
+        public let isResolved: Bool
+
+        public init(url: URL, isResolved: Bool) {
+            self.url = url
+            self.isResolved = isResolved
+        }
+    }
+
+    /// Strategy for turning a citation's `supportingText` into a clickable
+    /// link. The default (used when ``render(payload:content:citationLinkResolver:)``
+    /// is given `nil`) resolves against `content.contentMarkdown` via
+    /// ``TextFragmentBuilder`` — a `#:~:text=` scroll-to-text deep link.
+    /// PUNK-zup's video/PDF routes plug in their own resolver instead
+    /// (``VideoSummaryRenderer/citationLinkResolver(transcript:videoURL:)``,
+    /// ``PDFSummaryRenderer/citationLinkResolver(pages:pdfURL:)``) so the SAME
+    /// prompt/parse/render pipeline can cite a transcript timestamp or a PDF
+    /// page number instead of a text fragment, without duplicating the
+    /// section-rendering/footnote/dedup logic below.
+    public typealias CitationLinkResolver = @Sendable (WebSummaryCitation) -> CitationLinkOutcome
+
     /// Failure modes for ``parse(_:)``.
     public enum ParseError: Error, Sendable, Equatable, CustomStringConvertible {
         /// The response was empty (or whitespace/fence-only) after stripping
@@ -61,9 +87,15 @@ public enum WebSummaryPostProcessor {
     // MARK: - Entry point
 
     /// Parse `rawResponse` and render it against `content` in one call.
-    public static func process(rawResponse: String, content: WebContent) throws -> Result {
+    /// - Parameter citationLinkResolver: see ``CitationLinkResolver``; `nil`
+    ///   uses the default `#:~:text=` text-fragment resolver.
+    public static func process(
+        rawResponse: String,
+        content: WebContent,
+        citationLinkResolver: CitationLinkResolver? = nil
+    ) throws -> Result {
         let payload = try parse(rawResponse)
-        let rendered = render(payload: payload, content: content)
+        let rendered = render(payload: payload, content: content, citationLinkResolver: citationLinkResolver)
         return Result(
             markdown: rendered.markdown,
             payload: payload,
@@ -111,20 +143,40 @@ public enum WebSummaryPostProcessor {
     // MARK: - Render
 
     /// One citation with its assigned (deterministic, first-appearance)
-    /// footnote number and resolved page location.
+    /// footnote number and resolved link.
     private struct AssignedCitation {
         let number: Int
         let citation: WebSummaryCitation
-        let outcome: TextFragmentBuilder.Outcome
+        let link: CitationLinkOutcome
+    }
+
+    /// The default resolver: a `#:~:text=` scroll-to-text deep link built via
+    /// ``TextFragmentBuilder`` against `pageText`, falling back to the bare
+    /// `pageURL` when the citation can't be resolved uniquely.
+    static func defaultCitationLinkResolver(pageURL: URL, pageText: String) -> CitationLinkResolver {
+        { citation in
+            switch TextFragmentBuilder.build(supportingText: citation.supportingText, pageText: pageText) {
+            case .unique(let fragment), .disambiguated(let fragment):
+                let url = URL(string: baseURLString(pageURL) + "#:~:" + fragment) ?? pageURL
+                return CitationLinkOutcome(url: url, isResolved: true)
+            case .notFound, .ambiguous:
+                let bareURL = URL(string: baseURLString(pageURL)) ?? pageURL
+                return CitationLinkOutcome(url: bareURL, isResolved: false)
+            }
+        }
     }
 
     /// Render a decoded payload against the page it was summarized from.
+    /// - Parameter citationLinkResolver: see ``CitationLinkResolver``; `nil`
+    ///   uses ``defaultCitationLinkResolver(pageURL:pageText:)``.
     public static func render(
         payload: WebSummaryPayload,
-        content: WebContent
+        content: WebContent,
+        citationLinkResolver: CitationLinkResolver? = nil
     ) -> (markdown: String, unresolvedCitationCount: Int) {
         let pageText = content.contentMarkdown
         let pageURL = content.canonicalURL ?? content.sourceURL
+        let resolveLink = citationLinkResolver ?? defaultCitationLinkResolver(pageURL: pageURL, pageText: pageText)
 
         var assignedByKey: [String: AssignedCitation] = [:]
         var orderedAssigned: [AssignedCitation] = []
@@ -132,8 +184,8 @@ public enum WebSummaryPostProcessor {
         func assign(_ citation: WebSummaryCitation) -> AssignedCitation {
             let key = citationKey(citation)
             if let existing = assignedByKey[key] { return existing }
-            let outcome = TextFragmentBuilder.build(supportingText: citation.supportingText, pageText: pageText)
-            let assigned = AssignedCitation(number: orderedAssigned.count + 1, citation: citation, outcome: outcome)
+            let link = resolveLink(citation)
+            let assigned = AssignedCitation(number: orderedAssigned.count + 1, citation: citation, link: link)
             assignedByKey[key] = assigned
             orderedAssigned.append(assigned)
             return assigned
@@ -164,14 +216,7 @@ public enum WebSummaryPostProcessor {
                 content.headings.first(where: { $0.anchorID == anchor })?.text
             } ?? "Source"
             let preview = previewText(assigned.citation.supportingText)
-            let linkURL: String
-            switch assigned.outcome {
-            case .unique(let fragment), .disambiguated(let fragment):
-                linkURL = baseURLString(pageURL) + "#:~:" + fragment
-            case .notFound, .ambiguous:
-                linkURL = baseURLString(pageURL)
-            }
-            return "\(assigned.number). [\(headingText)](\(linkURL)) — \"\(preview)\""
+            return "\(assigned.number). [\(headingText)](\(assigned.link.url.absoluteString)) — \"\(preview)\""
         }
 
         var sections: [String] = []
@@ -184,12 +229,7 @@ public enum WebSummaryPostProcessor {
         sections.append("## Sources\n\n" + sourceLines.joined(separator: "\n"))
 
         let markdown = sections.joined(separator: "\n\n") + "\n"
-        let unresolvedCount = orderedAssigned.filter {
-            switch $0.outcome {
-            case .notFound, .ambiguous: return true
-            case .unique, .disambiguated: return false
-            }
-        }.count
+        let unresolvedCount = orderedAssigned.filter { !$0.link.isResolved }.count
 
         return (markdown, unresolvedCount)
     }

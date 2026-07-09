@@ -15,6 +15,13 @@ public enum WebFetchTier: String, Sendable, Codable, Equatable, CaseIterable {
     /// Tier 3 — the remote Jina Reader API (`r.jina.ai`). Opt-in only: the URL
     /// leaves the device, so it is gated on explicit per-domain consent.
     case jinaReader
+    /// Not part of the offline/browser/Jina ladder — content extracted from a
+    /// PDF via PDFKit (see ``PDFIngestExtracting``, ``PDFSummaryRenderer``).
+    case pdf
+    /// Not part of the offline/browser/Jina ladder — content built from a
+    /// fetched video transcript (see ``VideoTranscriptProviding``,
+    /// ``VideoSummaryRenderer``).
+    case videoTranscript
 
     /// Human-readable label for chat surfaces and logs.
     public var displayName: String {
@@ -22,6 +29,8 @@ public enum WebFetchTier: String, Sendable, Codable, Equatable, CaseIterable {
         case .readability: return "Readability"
         case .headlessBrowser: return "Headless browser"
         case .jinaReader: return "Jina Reader"
+        case .pdf: return "PDF"
+        case .videoTranscript: return "Video transcript"
         }
     }
 }
