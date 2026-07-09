@@ -77,6 +77,7 @@ public enum WebSummaryNoteWriter {
         summary: WebSummaryPostProcessor.Result,
         validatorIssueCount: Int,
         summaryModel: String,
+        promptVersion: String = WebSummaryPrompt.promptVersion,
         tags: [String] = [],
         status: String = "unread",
         author: String? = nil,
@@ -100,6 +101,7 @@ public enum WebSummaryNoteWriter {
             tags: effectiveTags,
             status: status,
             summaryModel: summaryModel,
+            promptVersion: promptVersion,
             validatorIssueCount: validatorIssueCount,
             unresolvedCitationCount: summary.unresolvedCitationCount,
             summaryMarkdown: summary.markdown
@@ -194,6 +196,7 @@ public enum WebSummaryNoteWriter {
         let tags: [String]
         let status: String
         let summaryModel: String
+        let promptVersion: String
         let validatorIssueCount: Int
         let unresolvedCitationCount: Int
         let summaryMarkdown: String
@@ -209,6 +212,7 @@ public enum WebSummaryNoteWriter {
         let tags = inputs.tags
         let status = inputs.status
         let summaryModel = inputs.summaryModel
+        let promptVersion = inputs.promptVersion
         let validatorIssueCount = inputs.validatorIssueCount
         let unresolvedCitationCount = inputs.unresolvedCitationCount
         let summaryMarkdown = inputs.summaryMarkdown
@@ -240,7 +244,7 @@ public enum WebSummaryNoteWriter {
         lines.append("  fetched: \(yamlQuoted(iso.string(from: content.extractedAt)))")
         lines.append("  fetcher: \(yamlQuoted(content.tier.rawValue))")
         lines.append("  summary_model: \(yamlQuoted(summaryModel))")
-        lines.append("  summary_prompt_version: \(yamlQuoted(WebSummaryPrompt.promptVersion))")
+        lines.append("  summary_prompt_version: \(yamlQuoted(promptVersion))")
         let words = wordCount(in: summaryMarkdown)
         lines.append("  word_count: \(words)")
         lines.append("  reading_time_min: \(readingTimeMinutes(wordCount: words))")

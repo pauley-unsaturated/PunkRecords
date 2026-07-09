@@ -104,7 +104,8 @@ extension ChatSessionController {
                 urlSummaryTargetURL = nil
             }
             do {
-                let content = try await fetchWebContent(url: url)
+                let routed = try await fetchRoutedContent(url: url)
+                let content = routed.content
                 try Task.checkCancellation()
 
                 urlSummaryPhase = .summarizing
@@ -113,10 +114,18 @@ extension ChatSessionController {
                     keychain: appState.keychainService,
                     config: parameters.config
                 )
-                let raw = try await completer.complete(prompt: WebSummaryPrompt.build(content: content))
+                let raw = try await completer.complete(prompt: WebSummaryPrompt.build(
+                    content: content,
+                    variant: routed.promptVariant,
+                    languageHint: routed.languageHint
+                ))
                 try Task.checkCancellation()
 
-                let result = try WebSummaryPostProcessor.process(rawResponse: raw, content: content)
+                let result = try WebSummaryPostProcessor.process(
+                    rawResponse: raw,
+                    content: content,
+                    citationLinkResolver: routed.citationLinkResolver
+                )
                 let issueCount = WebSummaryValidator.validate(payload: result.payload, content: content).count
                 try Task.checkCancellation()
 
@@ -128,6 +137,7 @@ extension ChatSessionController {
                     summary: result,
                     validatorIssueCount: issueCount,
                     summaryModel: modelID,
+                    promptVersion: routed.promptVariant.promptVersion,
                     now: now,
                     existingPaths: Set(appState.documents.map(\.path))
                 )
@@ -157,14 +167,17 @@ extension ChatSessionController {
         }
     }
 
-    /// Build the three-tier fetcher exactly as the chat's `web_fetch` tool does
-    /// (see ``runTurn(_:images:context:turn:)``) and fetch `url`.
-    private func fetchWebContent(url: URL) async throws -> WebContent {
+    /// Route `url` through the PUNK-zup classifier over the same three-tier
+    /// ladder the chat's `web_fetch` tool uses: PDFs and videos summarize from
+    /// PDFKit text / caption transcripts with page- and timestamp-anchored
+    /// citations, paywalls and login walls surface a typed explanation, and
+    /// transcript-shaped pages switch to the transcript prompt variant.
+    private func fetchRoutedContent(url: URL) async throws -> RoutedWebSummaryContent {
         let consentStore = WebFetchConsentStore()
-        let fetcher = ThreeTierWebContentFetcher.makeDefault(
+        let source = RoutedWebSummarySource.makeDefault(
             vaultRoot: appState.currentVault?.rootURL,
             jinaConsent: WebFetchConsentPrompt.makeConsentClosure(store: consentStore)
         )
-        return try await fetcher.fetch(url: url)
+        return try await source.fetch(url: url)
     }
 }

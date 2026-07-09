@@ -7,13 +7,13 @@ struct LongFormChunkPlannerTests {
 
     /// A paragraph long enough to be a meaningful chunk of text on its own —
     /// repeated to build up token counts deterministically.
-    private static func paragraph(_ seed: Int) -> String {
+    private func paragraph(_ seed: Int) -> String {
         "Paragraph \(seed) discusses the subject in some depth, with enough words and clauses "
             + "to resemble real prose rather than a placeholder, repeated so the token estimate "
             + "climbs steadily across many paragraphs in this synthetic long document fixture."
     }
 
-    private static func section(_ title: String, paragraphCount: Int, seedStart: Int) -> String {
+    private func section(_ title: String, paragraphCount: Int, seedStart: Int) -> String {
         let paragraphs = (0..<paragraphCount).map { paragraph(seedStart + $0) }
         return "## \(title)\n\n" + paragraphs.joined(separator: "\n\n")
     }

@@ -125,6 +125,12 @@ public enum LongFormChunkPlanner {
     /// larger than `targetTokens`. A single paragraph that alone exceeds the
     /// budget becomes its own oversized chunk rather than being split
     /// mid-sentence — sentence-safety wins over strict budget adherence.
+    ///
+    /// Budget accounting tracks the UTF-8 byte count of the JOINED chunk text
+    /// (including the `\n\n` separators) so the bound matches what
+    /// ``TokenEstimator/estimateTokens(in:)`` — a pure bytes/4 floor — will
+    /// later report for the assembled chunk; summing per-paragraph estimates
+    /// instead drifts over the target by the separator bytes and rounding.
     static func paragraphChunks(of text: String, targetTokens: Int) -> [String] {
         let paragraphs = text.components(separatedBy: "\n\n")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -136,16 +142,18 @@ public enum LongFormChunkPlanner {
 
         var chunks: [String] = []
         var current: [String] = []
-        var currentTokens = 0
+        var currentUTF8 = 0
         for paragraph in paragraphs {
-            let paragraphTokens = TokenEstimator.estimateTokens(in: paragraph)
-            if !current.isEmpty, currentTokens + paragraphTokens > targetTokens {
+            let paragraphUTF8 = paragraph.utf8.count
+            let joinedUTF8 = current.isEmpty ? paragraphUTF8 : currentUTF8 + 2 + paragraphUTF8
+            if !current.isEmpty, max(1, joinedUTF8 / 4) > targetTokens {
                 chunks.append(current.joined(separator: "\n\n"))
                 current = []
-                currentTokens = 0
+                currentUTF8 = paragraphUTF8
+            } else {
+                currentUTF8 = joinedUTF8
             }
             current.append(paragraph)
-            currentTokens += paragraphTokens
         }
         if !current.isEmpty { chunks.append(current.joined(separator: "\n\n")) }
         return chunks
