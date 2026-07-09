@@ -302,6 +302,30 @@ struct LLMChatPanel: View {
         return VStack(alignment: .leading, spacing: 8) {
             contextBanner
 
+            // URL-summarize flow (PUNK-ddq): progress row while running, or the
+            // "Summarize this URL" affordance when the composer holds a lone URL.
+            if controller.urlSummaryPhase != nil {
+                URLSummaryStatusView(controller: controller)
+            } else if controller.composerSummarizableURL != nil {
+                Button {
+                    controller.summarizeURLFromComposer(.fromUserDefaults())
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "sparkles")
+                        Text("Summarize this URL into a note")
+                    }
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.accentColor.opacity(0.1), in: .rect(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Fetch the page and save a cited summary note in Web/ — nothing is sent to the chat")
+                .accessibilityIdentifier("chatSummarizeURLAffordance")
+            }
+
             if !controller.pendingAttachments.isEmpty {
                 ScrollView(.horizontal) {
                     HStack(spacing: 6) {

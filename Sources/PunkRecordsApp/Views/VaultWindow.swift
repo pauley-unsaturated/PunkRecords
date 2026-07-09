@@ -119,6 +119,11 @@ struct VaultWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: .vaultWindowToggleInspector)) { _ in
             appState.isInspectorPresented.toggle()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .vaultWindowSummarizeClipboardURL)) { _ in
+            // PUNK-ddq: the chat panel shows the progress row, so reveal it.
+            appState.isChatPanelVisible = true
+            appState.chatController?.summarizeURLFromClipboard(.fromUserDefaults())
+        }
     }
 
     /// Renders the currently-selected note to a self-contained HTML file
@@ -259,6 +264,7 @@ extension Notification.Name {
     static let vaultWindowQuickOpen = Notification.Name("vaultWindowQuickOpen")
     static let vaultWindowRefile = Notification.Name("vaultWindowRefile")
     static let vaultWindowToggleInspector = Notification.Name("vaultWindowToggleInspector")
+    static let vaultWindowSummarizeClipboardURL = Notification.Name("vaultWindowSummarizeClipboardURL")
 }
 
 // MARK: - UI Testing Support

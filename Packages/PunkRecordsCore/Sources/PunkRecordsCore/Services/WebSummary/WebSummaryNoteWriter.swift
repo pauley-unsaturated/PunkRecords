@@ -90,7 +90,7 @@ public enum WebSummaryNoteWriter {
         let effectiveTags = mergedTags(tags)
         let effectiveAuthor = (author ?? content.byline)?.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let frontmatter = buildFrontmatter(
+        let frontmatter = buildFrontmatter(FrontmatterInputs(
             id: id,
             now: now,
             title: title,
@@ -103,7 +103,7 @@ public enum WebSummaryNoteWriter {
             validatorIssueCount: validatorIssueCount,
             unresolvedCitationCount: summary.unresolvedCitationCount,
             summaryMarkdown: summary.markdown
-        )
+        ))
 
         let body = "# \(title)\n\n" + summary.markdown
         let markdown = frontmatter + "\n\n" + body
@@ -182,20 +182,36 @@ public enum WebSummaryNoteWriter {
 
     // MARK: - Frontmatter
 
-    private static func buildFrontmatter(
-        id: DocumentID,
-        now: Date,
-        title: String,
-        content: WebContent,
-        author: String?,
-        published: Date?,
-        tags: [String],
-        status: String,
-        summaryModel: String,
-        validatorIssueCount: Int,
-        unresolvedCitationCount: Int,
-        summaryMarkdown: String
-    ) -> String {
+    /// Everything ``buildFrontmatter(_:)`` renders, bundled so the helper
+    /// stays under the lint parameter cap and call sites stay labeled.
+    private struct FrontmatterInputs {
+        let id: DocumentID
+        let now: Date
+        let title: String
+        let content: WebContent
+        let author: String?
+        let published: Date?
+        let tags: [String]
+        let status: String
+        let summaryModel: String
+        let validatorIssueCount: Int
+        let unresolvedCitationCount: Int
+        let summaryMarkdown: String
+    }
+
+    private static func buildFrontmatter(_ inputs: FrontmatterInputs) -> String {
+        let id = inputs.id
+        let now = inputs.now
+        let title = inputs.title
+        let content = inputs.content
+        let author = inputs.author
+        let published = inputs.published
+        let tags = inputs.tags
+        let status = inputs.status
+        let summaryModel = inputs.summaryModel
+        let validatorIssueCount = inputs.validatorIssueCount
+        let unresolvedCitationCount = inputs.unresolvedCitationCount
+        let summaryMarkdown = inputs.summaryMarkdown
         let iso = ISO8601DateFormatter()
         var lines = ["---"]
 

@@ -110,6 +110,11 @@ struct PunkRecordsApp: App {
                 }
                 .keyboardShortcut("i", modifiers: [.command])
 
+                Button("Summarize URL from Clipboard") {
+                    NotificationCenter.default.post(name: .vaultWindowSummarizeClipboardURL, object: nil)
+                }
+                .keyboardShortcut("u", modifiers: [.command, .shift])
+
                 Divider()
                 Toggle("Emacs Keybindings", isOn: $emacsKeybindings)
             }
