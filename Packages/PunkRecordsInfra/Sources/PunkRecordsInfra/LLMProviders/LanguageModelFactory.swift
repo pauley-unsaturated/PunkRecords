@@ -99,6 +99,21 @@ public enum LanguageModelFactory {
         case missingAPIKey(provider: String)
     }
 
+    /// The model identifier string ``makeModel(for:keychain:config:)`` would
+    /// build the backend with for `provider`/`config` — but derivable without
+    /// touching Keychain or constructing a model, since it's pure data lookup.
+    /// Used for attribution in written artifacts (e.g. PUNK-ddq's web-summary
+    /// note frontmatter `summary_model`) where the exact model string matters
+    /// more than whether the provider is currently authenticated.
+    public static func modelIdentifier(for provider: LLMProviderID, config: Config = Config()) -> String {
+        switch provider {
+        case .anthropic: return config.claudeModel
+        case .openAI: return config.openAIModel
+        case .anyLanguageModel: return config.ollamaModel
+        case .foundationModels: return "apple.foundation-models"
+        }
+    }
+
     /// Build the backing ``LanguageModel`` for `provider`.
     ///
     /// - Parameters:

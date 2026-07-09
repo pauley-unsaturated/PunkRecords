@@ -110,4 +110,35 @@ struct LanguageModelFactoryTests {
         #expect(await LanguageModelFactory.isAvailable(.anthropic, keychain: keychain))
         #expect(await LanguageModelFactory.isAvailable(.openAI, keychain: keychain))
     }
+
+    // MARK: - modelIdentifier
+
+    @Test("modelIdentifier reads the per-provider model id from config, no Keychain/network touched")
+    func modelIdentifierReadsFromConfig() {
+        let config = LanguageModelFactory.Config(
+            ollamaModel: "llama3.3",
+            openAIModel: "gpt-4o-mini",
+            claudeModel: "claude-3-5-sonnet-20241022"
+        )
+        #expect(LanguageModelFactory.modelIdentifier(for: .anthropic, config: config) == "claude-3-5-sonnet-20241022")
+        #expect(LanguageModelFactory.modelIdentifier(for: .openAI, config: config) == "gpt-4o-mini")
+        #expect(LanguageModelFactory.modelIdentifier(for: .anyLanguageModel, config: config) == "llama3.3")
+    }
+
+    @Test("modelIdentifier returns a stable label for .foundationModels (no user-tunable model id)")
+    func modelIdentifierFoundationModels() {
+        #expect(LanguageModelFactory.modelIdentifier(for: .foundationModels) == "apple.foundation-models")
+    }
+
+    @Test("modelIdentifier matches what makeModel actually constructs")
+    func modelIdentifierMatchesConstructedModel() throws {
+        let config = LanguageModelFactory.Config(claudeModel: "claude-3-5-sonnet-20241022")
+        let keychain = makeKeychain()
+        try keychain.setAPIKey("sk-ant-test-key", for: "anthropic")
+        defer { try? keychain.removeAPIKey(for: "anthropic") }
+
+        let model = try LanguageModelFactory.makeModel(for: .anthropic, keychain: keychain, config: config)
+        let anthropic = try #require(model as? AnthropicLanguageModel)
+        #expect(LanguageModelFactory.modelIdentifier(for: .anthropic, config: config) == anthropic.model)
+    }
 }

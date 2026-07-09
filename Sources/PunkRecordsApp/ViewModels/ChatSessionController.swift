@@ -131,6 +131,28 @@ final class ChatSessionController {
     /// (including a retry) without reconstructing an unused completer.
     var summarizer: ConversationSummarizer?
 
+    // MARK: - URL summary (PUNK-ddq)
+
+    /// The URL detected in the LIVE composer text, or `nil`. Pure derivation via
+    /// ``ComposerURLDetector`` — drives the "Summarize this URL" affordance.
+    var composerSummarizableURL: URL? {
+        ComposerURLDetector.summarizableURL(in: prompt)
+    }
+
+    /// Non-nil while a URL-summarize flow (composer affordance or "Summarize
+    /// URL from Clipboard") is fetching/summarizing/writing. `nil` when idle.
+    /// Drives `URLSummaryStatusView` and disables re-entry. Mutated only by the
+    /// URL-summarize flow (`ChatSessionController+URLSummary.swift`).
+    var urlSummaryPhase: URLSummaryPhase?
+
+    /// The URL the in-flight flow is working on, for the status view's label.
+    /// Cleared alongside `urlSummaryPhase`.
+    var urlSummaryTargetURL: URL?
+
+    /// The in-flight flow's task, held so `cancelURLSummary()` can actually
+    /// cancel the fetch/LLM call via cooperative Swift-concurrency cancellation.
+    var urlSummaryTask: Task<Void, Never>?
+
     init(appState: AppState) {
         self.appState = appState
 
