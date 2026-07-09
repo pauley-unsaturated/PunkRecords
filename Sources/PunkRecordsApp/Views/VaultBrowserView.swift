@@ -15,6 +15,9 @@ struct VaultBrowserView: View {
     @State private var threadPendingDeletion: ThreadSummary?
     @State private var showThreadDeleteDialog = false
 
+    // Smart Notes section (PUNK-ic6)
+    @State private var smartNoteSheet: SmartNoteSheetMode?
+
     @FocusState private var isSearchFocused: Bool
 
     private var isFiltering: Bool {
@@ -22,7 +25,10 @@ struct VaultBrowserView: View {
     }
 
     private var groupedByFolder: [SidebarFolderGroup] {
-        SidebarFilter.filter(documents: appState.documents, query: appState.sidebarFilterQuery)
+        // Smart-note files live in their own sidebar section (below), so keep
+        // them out of the plain notes tree.
+        let notes = appState.documents.filter { !SmartNoteFile.isSmartNotePath($0.path) }
+        return SidebarFilter.filter(documents: notes, query: appState.sidebarFilterQuery)
     }
 
     /// Documents that live at the vault root (folder == ""). They render flat at
@@ -77,6 +83,12 @@ struct VaultBrowserView: View {
                         }
                     }
 
+                    SmartNotesSection(
+                        rowForDocument: { row(for: $0, vaultRoot: vault.rootURL) },
+                        onNewSmartNote: { smartNoteSheet = .new },
+                        onEditSmartNote: { smartNoteSheet = .edit($0) }
+                    )
+
                     chatsSection
                 }
             }
@@ -91,6 +103,10 @@ struct VaultBrowserView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .vaultWindowFocusSidebarSearch)) { _ in
             isSearchFocused = true
+        }
+        .sheet(item: $smartNoteSheet) { mode in
+            SmartNoteEditorSheet(existing: mode.existingSmartNote)
+                .environment(appState)
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -406,6 +422,29 @@ private struct ThreadTreeRow: View {
             } label: {
                 Label("Delete Chat", systemImage: "trash")
             }
+        }
+    }
+}
+
+// MARK: - Smart Note sheet (PUNK-ic6)
+
+/// Which smart-note editor sheet to show: a brand-new note, or an edit of an
+/// existing one. `Identifiable` so it can drive `.sheet(item:)`.
+private enum SmartNoteSheetMode: Identifiable {
+    case new
+    case edit(SmartNote)
+
+    var id: String {
+        switch self {
+        case .new: return "__new_smart_note__"
+        case .edit(let note): return "edit:\(note.name)"
+        }
+    }
+
+    var existingSmartNote: SmartNote? {
+        switch self {
+        case .new: return nil
+        case .edit(let note): return note
         }
     }
 }

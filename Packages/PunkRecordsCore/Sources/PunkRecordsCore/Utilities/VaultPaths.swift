@@ -132,6 +132,20 @@ public enum VaultPaths {
         ".punkrecords/chat-transcript.migrated.md"
     }
 
+    // MARK: - Smart Notes (PUNK-ic6)
+
+    /// Vault-relative directory holding saved smart notes — one `.md` file per
+    /// query (``SmartNoteFile``). A visible, hand-editable folder (unlike the
+    /// hidden `.punkrecords/` state), so users can browse and version their
+    /// saved searches like any other note.
+    public static var smartNotesDirectory: RelativePath { "Smart Notes" }
+
+    /// Vault-relative path of the file backing a saved smart note, keyed by its
+    /// display name (also the file stem).
+    public static func smartNotePath(forName name: String) -> RelativePath {
+        "\(smartNotesDirectory)/\(name).md"
+    }
+
     // MARK: - Web content cache
 
     /// Vault-relative directory where fetched web pages are cached as raw HTML
