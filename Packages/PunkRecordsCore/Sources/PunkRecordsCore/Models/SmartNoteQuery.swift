@@ -44,7 +44,10 @@ public struct SmartNoteQuery: Codable, Equatable, Sendable {
     /// Encode to a single-line JSON string for the smart-note file frontmatter.
     public func toJSON() throws -> String {
         let data = try SmartNoteQuery.encoder().encode(self)
-        return String(decoding: data, as: UTF8.self)
+        guard let json = String(bytes: data, encoding: .utf8) else {
+            throw SmartNoteQueryError.notUTF8
+        }
+        return json
     }
 
     /// Decode from a JSON string, rejecting an unknown/future schema version so
@@ -61,6 +64,9 @@ public struct SmartNoteQuery: Codable, Equatable, Sendable {
 /// Errors decoding a persisted query.
 public enum SmartNoteQueryError: Error, Equatable, Sendable {
     case unsupportedVersion(Int)
+    /// Encoder output failed UTF-8 validation — unreachable for JSONEncoder,
+    /// present only to satisfy the failable Data→String conversion.
+    case notUTF8
 }
 
 // MARK: - Predicate tree
